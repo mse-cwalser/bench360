@@ -41,7 +41,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from benchmark.benchmark import ModelBenchmark
+from benchmark.model_benchmark import ModelBenchmark
 from benchmark.utils_multi import load_multi_cfg
 
 # ── Silence noisy logs up‑front ─────────────────────────────────────────────
