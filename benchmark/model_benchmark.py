@@ -181,9 +181,38 @@ class ModelBenchmark:
                 print(f"[ERROR] Could not estimate model size for {repo_id}: {e}")
             return 0.0
 
-
     def generate(self, prompts):
-        return self.iec.completion(prompts, temperature=self.temperature, top_p=self.top_p, max_tokens=self.max_tokens)
+        api = getattr(self, "api_type", "completion")
+
+        if api == "chat_completion":
+            results = []
+            for p in prompts:
+                # If the prompt is a dict, unpack it to support images
+                if isinstance(p, dict):
+                    res = self.iec.chat_completion(
+                        messages=p.get("messages", ""),
+                        images=p.get("images", None),
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        max_tokens=self.max_tokens
+                    )
+                else:
+                    # Standard text-only chat completion
+                    res = self.iec.chat_completion(
+                        messages=p,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        max_tokens=self.max_tokens
+                    )
+                results.append(res)
+            return results
+        else:
+            return self.iec.completion(
+                prompts,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                max_tokens=self.max_tokens
+            )
 
     def _generate_and_time(self, prompt):
         """
@@ -444,7 +473,8 @@ class ModelBenchmark:
         batch_size: Optional[int] = None,
         samples: Optional[int] = None,
         sample_interval: float = 0.1,
-        quality_metric: bool = True
+        quality_metric: bool = True,
+        api_type: Optional[str] = None,
     ):
         # 1) instantiate Task
         if task == "summarization":
@@ -462,8 +492,14 @@ class ModelBenchmark:
         elif task == "mmlu":
             from benchmark.tasks.mmlu import MMLUTask
             task_ = MMLUTask()
+        elif task == "vision":
+            from benchmark.tasks.vision import SimpleVisionTask
+            task_ = SimpleVisionTask()
         else:
             raise ValueError(f"Task {task!r} not supported.")
+
+        # Capture the api_type: use the explicit override if provided, otherwise fallback to task default
+        self.api_type = api_type or getattr(task_, "api_type", "completion")
 
         # 2) initialize & metadata
         meta_df = self._initialize(task=task, scenario=scenario)
