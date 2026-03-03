@@ -104,9 +104,19 @@ class InferenceEngineClient:
             stream: bool = False,
     ):
         """
-        Send a request to the newer chat.completions endpoint.
-        :param messages: A list of OpenAI message dicts, OR a simple string prompt.
-        :param images: Optional local file path(s), HTTP URL(s), or base64 data URI(s).
+        Send a request to the chat.completions endpoint.
+
+        Args:
+            messages (str | list[dict]): A list of OpenAI message dicts, or a simple string prompt.
+            images (str | list[str] | None, optional): Local file path(s), HTTP URL(s), or base64 data URI(s). Defaults to None.
+            model (str | None, optional): The model to use. If None, falls back to the instance's default model. Defaults to None.
+            temperature (float, optional): Sampling temperature. Defaults to 0.1.
+            max_tokens (int, optional): The maximum number of tokens to generate. Defaults to 64.
+            top_p (float, optional): Nucleus sampling parameter. Defaults to 0.9.
+            stream (bool, optional): Whether to stream the response. Defaults to False.
+
+        Returns:
+            str | Any: The text content of the generated message if stream is False. Otherwise, returns the stream object.
         """
         model_to_use = model or self.model
 
@@ -161,7 +171,6 @@ class InferenceEngineClient:
         """
         Send one or more prompts. :param prompt: string or list[str]
         """
-        model = model
         is_batch = isinstance(prompt, (list, tuple))
 
         resp = self.client.completions.create(

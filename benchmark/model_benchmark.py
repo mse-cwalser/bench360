@@ -185,11 +185,10 @@ class ModelBenchmark:
         api = getattr(self, "api_type", "completion")
 
         if api == "chat_completion":
-            results = []
-            for p in prompts:
-                # If the prompt is a dict, unpack it to support images
+            # Helper function for the thread pool to execute
+            def _call_chat(p):
                 if isinstance(p, dict):
-                    res = self.iec.chat_completion(
+                    return self.iec.chat_completion(
                         messages=p.get("messages", ""),
                         images=p.get("images", None),
                         temperature=self.temperature,
@@ -197,16 +196,22 @@ class ModelBenchmark:
                         max_tokens=self.max_tokens
                     )
                 else:
-                    # Standard text-only chat completion
-                    res = self.iec.chat_completion(
+                    return self.iec.chat_completion(
                         messages=p,
                         temperature=self.temperature,
                         top_p=self.top_p,
                         max_tokens=self.max_tokens
                     )
-                results.append(res)
+
+            # Fire all requests in the batch concurrently
+            results = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(prompts)) as executor:
+                # executor.map keeps the results in the exact same order as the input prompts
+                results = list(executor.map(_call_chat, prompts))
             return results
+
         else:
+            # Standard completion API handles list of strings natively
             return self.iec.completion(
                 prompts,
                 temperature=self.temperature,
