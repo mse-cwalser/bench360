@@ -9,6 +9,7 @@ from typing import Optional
 import random
 import multiprocessing as mp
 import concurrent.futures
+import asyncio
 import psutil
 import subprocess
 import math
@@ -41,18 +42,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOOKUP_DIR = PROJECT_ROOT / "benchmark" / "lookup"
 RESULTS_DIR = PROJECT_ROOT / "results_benchmark"
 
+
 class ModelBenchmark:
     def __init__(
-        self,
-        backend="tgi",
-        model_name="",
-        model_path=None,
-        temperature: float = 0.6,
-        top_p: float = 0.95,
-        max_tokens: int = 128,
-        verbose=False,
-        dump_server_output: bool = False,
-        script_path: str = None
+            self,
+            backend="tgi",
+            model_name="",
+            model_path=None,
+            temperature: float = 0.6,
+            top_p: float = 0.95,
+            max_tokens: int = 128,
+            verbose=False,
+            dump_server_output: bool = False,
+            script_path: str = None
     ):
         self.backend = backend
         self.model_path = model_path
@@ -162,7 +164,7 @@ class ModelBenchmark:
             with open(index_path, "r", encoding="utf-8") as f:
                 total = json.load(f).get("metadata", {}).get("total_size")
                 if isinstance(total, int) and total > 0:
-                    return total / (1024**2)
+                    return total / (1024 ** 2)
         except Exception as e:
             if self.verbose:
                 print(f"[WARN] Could not retrieve index.json for {repo_id}: {e}")
@@ -175,41 +177,42 @@ class ModelBenchmark:
                 if Path(file_info).suffix in weight_exts:
                     hf_obj = self.api.head(repo_id, file_info, revision=revision, repo_type="model")
                     size_sum += hf_obj.size
-            return round(size_sum / (1024**2), 2)
+            return round(size_sum / (1024 ** 2), 2)
         except Exception as e:
             if self.verbose:
                 print(f"[ERROR] Could not estimate model size for {repo_id}: {e}")
             return 0.0
 
+    async def _async_generate_batch(self, prompts):
+        """Fire concurrent async requests for a batch of prompts."""
+        tasks = []
+        for p in prompts:
+            # Extract messages and images if the prompt is a dictionary (multimodal)
+            if isinstance(p, dict):
+                msg = p.get("messages", p)
+                imgs = p.get("images", None)
+            else:
+                msg = p
+                imgs = None
+
+            tasks.append(
+                self.iec.async_chat_completion(
+                    messages=msg,
+                    images=imgs,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    max_tokens=self.max_tokens
+                )
+            )
+        # Run all requests in the current batch concurrently
+        return await asyncio.gather(*tasks)
+
     def generate(self, prompts):
         api = getattr(self, "api_type", "completion")
 
         if api == "chat_completion":
-            # Helper function for the thread pool to execute
-            def _call_chat(p):
-                if isinstance(p, dict):
-                    return self.iec.chat_completion(
-                        messages=p.get("messages", ""),
-                        images=p.get("images", None),
-                        temperature=self.temperature,
-                        top_p=self.top_p,
-                        max_tokens=self.max_tokens
-                    )
-                else:
-                    return self.iec.chat_completion(
-                        messages=p,
-                        temperature=self.temperature,
-                        top_p=self.top_p,
-                        max_tokens=self.max_tokens
-                    )
-
-            # Fire all requests in the batch concurrently
-            results = []
-            with concurrent.futures.ThreadPoolExecutor(max_workers=len(prompts)) as executor:
-                # executor.map keeps the results in the exact same order as the input prompts
-                results = list(executor.map(_call_chat, prompts))
-            return results
-
+            # Execute the async event loop for this batch
+            return asyncio.run(self._async_generate_batch(prompts))
         else:
             # Standard completion API handles list of strings natively
             return self.iec.completion(
@@ -228,13 +231,12 @@ class ModelBenchmark:
         out = self.generate([prompt])[0]
         return out, t0
 
-
     @staticmethod
     def estimate_local_query_cost(
-        inf_time_sec: float,
-        power_watts: float = 0.0,
-        electricity_usd_per_kwh: float = 0.31,
-        csv_path: Path | str = LOOKUP_DIR / "nvidia_llm_gpus.csv"
+            inf_time_sec: float,
+            power_watts: float = 0.0,
+            electricity_usd_per_kwh: float = 0.31,
+            csv_path: Path | str = LOOKUP_DIR / "nvidia_llm_gpus.csv"
     ) -> dict:
         """
         Estimate amortization + energy cost for a single LLM query.
@@ -265,14 +267,15 @@ class ModelBenchmark:
         if getattr(self, "_already_launched", False):
             # clone cached base row to avoid mutating the original
             meta = self._meta_base.copy()
-            meta["task"]      = task
-            meta["scenario"]  = scenario
+            meta["task"] = task
+            meta["scenario"] = scenario
             # no cold-start fields change here
             return meta
 
         # ── First launch: cold start ──────────────────────────────
         t0 = time.time()
-        self.iec.launch(backend=self.backend, model=self.model_path, dump_server_output=self.dump_server_output, script_path=self.script_path)
+        self.iec.launch(backend=self.backend, model=self.model_path, dump_server_output=self.dump_server_output,
+                        script_path=self.script_path)
         startup = time.time() - t0
 
         # optional warm-up
@@ -282,17 +285,17 @@ class ModelBenchmark:
         self.model_size = self.get_model_size(self.model_path)
 
         meta = {
-            "model_name":   self.model_name,
+            "model_name": self.model_name,
             "model_size_mb": self.model_size,
-            "temperature":   self.temperature,
-            "top_p":         self.top_p,
-            "max_tokens":    self.max_tokens,
-            "task":          task,
-            "scenario":      scenario,
-            "backend":       self.backend,
-            "startup":       round(startup, 4),
-            "ttft_sec":      round(ttft, 4),
-            "coldstart":     round(startup + ttft, 4)
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+            "task": task,
+            "scenario": scenario,
+            "backend": self.backend,
+            "startup": round(startup, 4),
+            "ttft_sec": round(ttft, 4),
+            "coldstart": round(startup + ttft, 4)
         }
 
         # ── cache for later calls ─────────────────────────────────
@@ -300,12 +303,11 @@ class ModelBenchmark:
         self._meta_base = pd.DataFrame([meta])  # store DataFrame copy
         return self._meta_base
 
-
     def _batch_generator(
-        self,
-        prompts: list[str],
-        refs:   list[str],
-        batch_size: int
+            self,
+            prompts: list[str],
+            refs: list[str],
+            batch_size: int
     ):
         """
         Yield (batch_prompts, batch_refs) of size `batch_size`.
@@ -317,18 +319,17 @@ class ModelBenchmark:
             batch_size = len(prompts)
 
         for ps, rs in zip(
-            chunker(prompts, batch_size),
-            chunker(refs,    batch_size)
+                chunker(prompts, batch_size),
+                chunker(refs, batch_size)
         ):
             yield ps, rs
 
-
     def _prepare_prompts_per_user(
-        self,
-        task_obj,
-        run_time: float,
-        num_users: int,
-        requests_per_user_per_min: float
+            self,
+            task_obj,
+            run_time: float,
+            num_users: int,
+            requests_per_user_per_min: float
     ):
         """
         Generate per-user arrival times and collect prompts.
@@ -345,10 +346,10 @@ class ModelBenchmark:
         return prompts, refs, sched_ts, user_ids
 
     def _generate_per_user_arrivals(
-        self,
-        num_users: int,
-        rps_per_user: float,
-        run_time: float
+            self,
+            num_users: int,
+            rps_per_user: float,
+            run_time: float
     ):
         """
         Independently sample arrival times per user; merge sorted.
@@ -366,15 +367,15 @@ class ModelBenchmark:
         return all_events
 
     def _user_producer(
-        self,
-        uid: int,
-        rps_user: float,
-        wall_start: float,
-        run_time: float,
-        prompts: list[str],
-        refs: list[str],
-        executor: concurrent.futures.Executor,
-        futures: list,                              # ← NEW: shared list
+            self,
+            uid: int,
+            rps_user: float,
+            wall_start: float,
+            run_time: float,
+            prompts: list[str],
+            refs: list[str],
+            executor: concurrent.futures.Executor,
+            futures: list,  # ← NEW: shared list
     ):
         """
         Submit a Poisson stream of requests for exactly `run_time` seconds.
@@ -382,23 +383,23 @@ class ModelBenchmark:
         Each submitted Future is appended to the shared `futures` list so the
         caller can later harvest results with concurrent.futures.as_completed().
         """
-        rng       = numpy_rng                      # global RNG (seeded once)
-        deadline  = wall_start + run_time
-        idx       = 0                              # round-robin over prompt pool
+        rng = numpy_rng  # global RNG (seeded once)
+        deadline = wall_start + run_time
+        idx = 0  # round-robin over prompt pool
 
         while True:
-            gap     = rng.exponential(1.0 / rps_user)   # inter-arrival
-            target  = time.time() + gap
+            gap = rng.exponential(1.0 / rps_user)  # inter-arrival
+            target = time.time() + gap
             if target >= deadline:
-                break                                 # stop after n seconds
+                break  # stop after n seconds
             time.sleep(target - time.time())
 
             prompt = prompts[idx % len(prompts)]
-            ref    = refs[idx % len(refs)]
-            idx   += 1
+            ref = refs[idx % len(refs)]
+            idx += 1
 
             scheduled_ts = target - wall_start
-            submit_ts    = time.time()
+            submit_ts = time.time()
 
             future = executor.submit(
                 self._run_single_request_capture,
@@ -409,9 +410,7 @@ class ModelBenchmark:
                 uid,
                 submit_ts,
             )
-            futures.append(future)                   # ← track the Future
-
-
+            futures.append(future)  # ← track the Future
 
     # ─────────────────────────────────────────────────────────────
     #  Per-request capture  (worker thread)
@@ -420,10 +419,10 @@ class ModelBenchmark:
             self,
             prompt: str,
             reference: str,
-            start_wall: float,      # wall clock of experiment start (main thread)
-            scheduled_ts: float,    # target arrival time relative to start_wall
+            start_wall: float,  # wall clock of experiment start (main thread)
+            scheduled_ts: float,  # target arrival time relative to start_wall
             user_id: int,
-            submit_time: float,     # NEW – when main thread queued the task
+            submit_time: float,  # NEW – when main thread queued the task
     ):
         """
         All stamps are **client-side**.
@@ -439,47 +438,45 @@ class ModelBenchmark:
         """
 
         # ── 1. thread has started ──────────────────────────────────────────
-        send_time  = time.time()
-        queue_time = send_time - submit_time         # Item #4
+        send_time = time.time()
+        queue_time = send_time - submit_time  # Item #4
 
         # difference between intended arrival and dispatch to backend
-        wait_time  = send_time - (start_wall + scheduled_ts)
+        wait_time = send_time - (start_wall + scheduled_ts)
 
         # ── 2. generate answer & measure ──────────────────────────────────
         raw_out, start_time = self._generate_and_time(prompt)
-        gen_time   = time.time() - start_time
-        e2e_latency = wait_time + gen_time           # Item #3
+        gen_time = time.time() - start_time
+        e2e_latency = wait_time + gen_time  # Item #3
 
         # ── 3. return record ──────────────────────────────────────────────
         return {
-            "user_id":          user_id,
-            "prompt":           prompt,
-            "generated_raw":    raw_out,
-            "reference":        reference,
-            "submit_time":      submit_time,
-            "send_time":        send_time,
-            "start_time":       start_time,
-            "generation_time":  gen_time,
-            "scheduled_ts":     scheduled_ts,
-            "queue_time":       round(queue_time, 6),
-            "wait_time":        round(wait_time, 6),
-            "e2e_latency":      round(e2e_latency, 6),
+            "user_id": user_id,
+            "prompt": prompt,
+            "generated_raw": raw_out,
+            "reference": reference,
+            "submit_time": submit_time,
+            "send_time": send_time,
+            "start_time": start_time,
+            "generation_time": gen_time,
+            "scheduled_ts": scheduled_ts,
+            "queue_time": round(queue_time, 6),
+            "wait_time": round(wait_time, 6),
+            "e2e_latency": round(e2e_latency, 6),
         }
 
-
-
     def _run_scenario(
-        self,
-        task: str,
-        scenario: str = "server",
-        run_time: float = 600.0,
-        concurrent_users: int = 32,
-        requests_per_user_per_min: float = 60.0,
-        batch_size: Optional[int] = None,
-        samples: Optional[int] = None,
-        sample_interval: float = 0.1,
-        quality_metric: bool = True,
-        api_type: Optional[str] = None,
+            self,
+            task: str,
+            scenario: str = "server",
+            run_time: float = 600.0,
+            concurrent_users: int = 32,
+            requests_per_user_per_min: float = 60.0,
+            batch_size: Optional[int] = None,
+            samples: Optional[int] = None,
+            sample_interval: float = 0.1,
+            quality_metric: bool = True,
+            api_type: Optional[str] = None,
     ):
         # 1) instantiate Task
         if task == "summarization":
@@ -522,7 +519,7 @@ class ModelBenchmark:
         elif scenario == "batch":
             meta_df = meta_df.assign(
                 batch_size=batch_size or 0,
-                num_queries= samples or 0
+                num_queries=samples or 0
             )
         elif scenario == "long_context":
             meta_df = meta_df.assign(
@@ -535,7 +532,7 @@ class ModelBenchmark:
 
         # 4) prepare prompts
         if scenario == "server":
-            est_requests = math.ceil(            # rough upper bound:
+            est_requests = math.ceil(  # rough upper bound:
                 run_time * concurrent_users * requests_per_user_per_min / 60
             )
             prompts, refs = task_.generate_prompts(num_examples=est_requests)
@@ -545,14 +542,13 @@ class ModelBenchmark:
         elif scenario == "long_context":
             prompts, refs, lengths, crs = task_.generate_prompts(num_samples_per_level=samples or 0)
 
-
         # ─────────────────────────────────────────────────────────────
         # 5)  start metrics monitor  (needs wall_start for hard_end)
         # ─────────────────────────────────────────────────────────────
         global_readings = {"memory": [], "power": [], "util": [], "cpu": [], "ram": []}
-        stop_evt        = threading.Event()
+        stop_evt = threading.Event()
 
-        wall_start = time.time()                        # must precede the monitor
+        wall_start = time.time()  # must precede the monitor
         # hard_end   = wall_start + run_time              # 300 s etc.
 
         mon = threading.Thread(
@@ -568,19 +564,19 @@ class ModelBenchmark:
             # ─────────────────────────────────────────────────────────────
             # 6)  executor + k user-producer threads
             # ─────────────────────────────────────────────────────────────
-            futures   : list[concurrent.futures.Future] = []
-            rps_user  = requests_per_user_per_min / 60.0
-            executor  = concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_users)
+            futures: list[concurrent.futures.Future] = []
+            rps_user = requests_per_user_per_min / 60.0
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_users)
 
             producers = []
             for uid in range(concurrent_users):
                 th = threading.Thread(
-                    target=self._user_producer,          # <- unchanged helper
+                    target=self._user_producer,  # <- unchanged helper
                     args=(
                         uid, rps_user, wall_start, run_time,
                         prompts, refs,
-                        executor,                        # pass the pool
-                        futures,                         # pass *shared* list to collect futures
+                        executor,  # pass the pool
+                        futures,  # pass *shared* list to collect futures
                     ),
                     daemon=True,
                 )
@@ -592,27 +588,26 @@ class ModelBenchmark:
             # ─────────────────────────────────────────────────────────────
             time.sleep(run_time)
             for th in producers:
-                th.join()               # guarantees no new tasks after the deadline
+                th.join()  # guarantees no new tasks after the deadline
 
             # ─────────────────────────────────────────────────────────────
             # 8)  drain the executor (let all queued futures finish)
             # ─────────────────────────────────────────────────────────────
-            executor.shutdown(wait=True)    # waits until every submitted task is done
+            executor.shutdown(wait=True)  # waits until every submitted task is done
 
             # collect finished records
-        
+
             for fut in concurrent.futures.as_completed(futures):
                 try:
                     intermediate_records.append(fut.result())
                 except Exception:
-                    pass                    # ignore cancelled / failed requests
+                    pass  # ignore cancelled / failed requests
 
             # ─────────────────────────────────────────────────────────────
             # 9)  stop monitor exactly at hard_end
             # ─────────────────────────────────────────────────────────────
             stop_evt.set()
             mon.join()
-
 
         elif scenario == "batch":
             for ps, rs in self._batch_generator(prompts, refs, batch_size):
@@ -626,7 +621,7 @@ class ModelBenchmark:
                         "reference": ref,
                         "generation_time": gen_time / len(ps) if ps else 0,
                     })
-        
+
         elif scenario == "long_context":
             for prompt, ref, length, crs in zip(prompts, refs, lengths, crs):
                 t0 = time.time()
@@ -640,15 +635,14 @@ class ModelBenchmark:
                 gen_time = time.time() - t0
 
                 intermediate_records.append({
-                    "context_range": crs,      # e.g. "3k" or "4k"
-                    "length": length,         # original context length in tokens
+                    "context_range": crs,  # e.g. "3k" or "4k"
+                    "length": length,  # original context length in tokens
                     "prompt": prompt,
                     "generated_raw": raw_out,
                     "reference": ref,
                     "generation_time": gen_time,
                     "successful": success
                 })
-
 
         else:  # single or other non-server, non-batch scenario
             for prompt, ref in zip(prompts, refs):
@@ -747,8 +741,8 @@ class ModelBenchmark:
 
         for rec in intermediate_records:
             generated = clean_prediction([rec["generated_raw"]])[0]
-            nt = tok_cnt(generated)     # number of tokens generated
-            ns = sent_cnt(generated, mode = scenario)    # number of sentences generated
+            nt = tok_cnt(generated)  # number of tokens generated
+            ns = sent_cnt(generated, mode=scenario)  # number of sentences generated
             gen_time = rec["generation_time"]
 
             # 1) Average Token Latency (seconds per token)
@@ -777,40 +771,41 @@ class ModelBenchmark:
             # If you’re in “server” mode, also include scheduling info:
             if scenario == "server":
                 final_rec = {
-                    "user_id":      rec["user_id"],
+                    "user_id": rec["user_id"],
                     "scheduled_ts": rec["scheduled_ts"],
-                    "submit_time":  rec["submit_time"],
-                    "send_time":    rec["send_time"],
-                    "start_time":   rec["start_time"],
-                    "queue_time":   rec["queue_time"],
-                    "wait_time":    rec["wait_time"],
-                    "e2e_latency":  rec["e2e_latency"],
+                    "submit_time": rec["submit_time"],
+                    "send_time": rec["send_time"],
+                    "start_time": rec["start_time"],
+                    "queue_time": rec["queue_time"],
+                    "wait_time": rec["wait_time"],
+                    "e2e_latency": rec["e2e_latency"],
                 }
 
             elif scenario == "long_context":
                 final_rec = {
-                    "context_range":     rec["context_range"],   # e.g. "3k" or "4k"
-                    "length":            rec["length"] + 160 + 10, # original context length in tokens + 153 for the prompt + 10 for the question
-                    "successful":        rec['successful'],      # whether generation was successful
+                    "context_range": rec["context_range"],  # e.g. "3k" or "4k"
+                    "length": rec["length"] + 160 + 10,
+                    # original context length in tokens + 153 for the prompt + 10 for the question
+                    "successful": rec['successful'],  # whether generation was successful
                 }
             else:
                 final_rec = {
                 }
 
             add_final_rec = {
-                
-                "prompt":              rec["prompt"],
-                "generated_answer":    generated,
-                "reference_answer":    rec["reference"],
-                "generation_time":     gen_time,
-                "tokens_generated":    nt,
+
+                "prompt": rec["prompt"],
+                "generated_answer": generated,
+                "reference_answer": rec["reference"],
+                "generation_time": gen_time,
+                "tokens_generated": nt,
                 "sentences_generated": ns,
-                "ATL":                 round(ATL, 6),
-                "GL" :                 round(GL, 6),
-                "TPS":                 round(TPS, 2),
-                "SPS":                 round(SPS, 2),
-                "energy_per_token":    round(energy_per_token, 6),      # in J/token
-                "energy_per_sentence": round(energy_per_sentence, 6),   # in J/sentence
+                "ATL": round(ATL, 6),
+                "GL": round(GL, 6),
+                "TPS": round(TPS, 2),
+                "SPS": round(SPS, 2),
+                "energy_per_token": round(energy_per_token, 6),  # in J/token
+                "energy_per_sentence": round(energy_per_sentence, 6),  # in J/sentence
                 **quality
             }
 
@@ -832,13 +827,12 @@ class ModelBenchmark:
         # 14) Return the run report and details DataFrame
         return run_report, details_df, readings_df
 
-
     def run(
         self,
         *,
         scenario: str = "server",
         samples = None,
-        task: Optional[str] = None,        
+        task: Optional[str] = None,
         batch_size: Optional[int] = None,
         run_time: Optional[float] = None,
         concurrent_users: int = 32,
@@ -855,7 +849,8 @@ class ModelBenchmark:
         # SERVER scenario: require run_time, disallow samples or batch_size
         if scenario == "server":
             if run_time is None or concurrent_users is None or requests_per_user_per_min is None:
-                raise ValueError("For 'server' scenario, run_time , concurrent_users, and requests_per_user_per_min must be specified.")
+                raise ValueError(
+                    "For 'server' scenario, run_time , concurrent_users, and requests_per_user_per_min must be specified.")
             if samples is not None or batch_size is not None:
                 raise ValueError(
                     "For 'server' scenario, do not set 'samples' or 'batch_size'; "
@@ -873,7 +868,7 @@ class ModelBenchmark:
         elif scenario == "single":
             batch_size = 1
             run_time = None  # not used in single mode
-        
+
         else:
             # LONG_CONTEXT scenario: samples is the number of queries per context
             if samples is None:

@@ -6,6 +6,7 @@ import base64
 import mimetypes
 from pathlib import Path
 import httpx
+from openai import OpenAI, AsyncOpenAI
 from benchmark.utils import _start_log_tailer
 
 class InferenceEngineClient:
@@ -16,14 +17,11 @@ class InferenceEngineClient:
     """
 
     def __init__(self, base_url="http://127.0.0.1:23333/v1", api_key="none"):
-        from openai import OpenAI
         self.base_url = base_url
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=httpx.Timeout(60.0))
         self._launcher_proc = None
         self.model = None
         self.NAME = "bench360_inference_engine"
-
-
 
     def launch(self, backend: str, model: str, timeout: float = 500.0, dump_server_output: bool = False, script_path: str = None):
         """
@@ -51,10 +49,10 @@ class InferenceEngineClient:
         ]
         self._launcher_proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,          # ⟵ was DEVNULL
-            stderr=subprocess.STDOUT,        # merge both streams
+            stdout=subprocess.PIPE,  # ⟵ was DEVNULL
+            stderr=subprocess.STDOUT,  # merge both streams
             text=True,
-            bufsize=1                        # line-buffered
+            bufsize=1  # line-buffered
         )
 
         # Start a daemon thread to read the launcher output
@@ -93,10 +91,28 @@ class InferenceEngineClient:
                 )
             time.sleep(2.0)
 
+    def _format_messages(self, messages, images=None):
+        """Helper to standardize message formatting for both sync and async calls."""
+        if isinstance(messages, str):
+            if images:
+                if isinstance(images, str):
+                    images = [images]
+                content_list = [{"type": "text", "text": messages}]
+                for img in images:
+                    processed_uri = self._prepare_image_input(img)
+                    content_list.append({
+                        "type": "image_url",
+                        "image_url": {"url": processed_uri}
+                    })
+                return [{"role": "user", "content": content_list}]
+            else:
+                return [{"role": "user", "content": messages}]
+        return messages
+
     def chat_completion(
             self,
             messages,
-            images: str | list[str] | None = None,  # Accepts a single path/URL or a list
+            images: str | list[str] | None = None,
             model: str | None = None,
             temperature: float = 0.1,
             max_tokens: int = 64,
@@ -105,45 +121,9 @@ class InferenceEngineClient:
     ):
         """
         Send a request to the chat.completions endpoint.
-
-        Args:
-            messages (str | list[dict]): A list of OpenAI message dicts, or a simple string prompt.
-            images (str | list[str] | None, optional): Local file path(s), HTTP URL(s), or base64 data URI(s). Defaults to None.
-            model (str | None, optional): The model to use. If None, falls back to the instance's default model. Defaults to None.
-            temperature (float, optional): Sampling temperature. Defaults to 0.1.
-            max_tokens (int, optional): The maximum number of tokens to generate. Defaults to 64.
-            top_p (float, optional): Nucleus sampling parameter. Defaults to 0.9.
-            stream (bool, optional): Whether to stream the response. Defaults to False.
-
-        Returns:
-            str | Any: The text content of the generated message if stream is False. Otherwise, returns the stream object.
         """
         model_to_use = model or self.model
-
-        if isinstance(messages, str):
-            if images:
-                # 1) Standardize input into a list
-                if isinstance(images, str):
-                    images = [images]
-
-                # 2) Build the multimodal content list
-                content_list = [{"type": "text", "text": messages}]
-
-                # 3) Process and append each image
-                for img in images:
-                    processed_uri = self._prepare_image_input(img)
-                    content_list.append({
-                        "type": "image_url",
-                        "image_url": {"url": processed_uri}
-                    })
-
-                formatted_messages = [{"role": "user", "content": content_list}]
-            else:
-                # Text-only simple prompt
-                formatted_messages = [{"role": "user", "content": messages}]
-        else:
-            # Assume it's already a well-formatted OpenAI message list
-            formatted_messages = messages
+        formatted_messages = self._format_messages(messages, images)
 
         resp = self.client.chat.completions.create(
             model=model_to_use,
@@ -157,6 +137,39 @@ class InferenceEngineClient:
         if stream:
             return resp
 
+        return resp.choices[0].message.content
+
+    async def async_chat_completion(
+            self,
+            messages,
+            images: str | list[str] | None = None,
+            model: str | None = None,
+            temperature: float = 0.1,
+            max_tokens: int = 64,
+            top_p: float = 0.9,
+    ):
+        """
+        Send an asynchronous request to the chat.completions endpoint using AsyncOpenAI.
+        """
+        model_to_use = self.model
+        formatted_messages = self._format_messages(messages, images)
+
+        # Initialize the async client locally to bind to the current event loop safely
+        async_client = AsyncOpenAI(
+            api_key=self.client.api_key,
+            base_url=self.base_url,
+            timeout=httpx.Timeout(60.0)
+        )
+
+        resp = await async_client.chat.completions.create(
+            model=model_to_use,
+            messages=formatted_messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+        )
+
+        await async_client.close()
         return resp.choices[0].message.content
 
     def completion(
@@ -303,7 +316,6 @@ class InferenceEngineClient:
 
         # If it's not a local file, assume it's a web URL or pre-encoded Base64 string
         return image_input
-
 
 
 if __name__ == "__main__":
