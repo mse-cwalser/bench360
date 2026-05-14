@@ -1,0 +1,14 @@
+experiment_name: "kleister_nda_vl"
+backend: "vllm-vl"
+
+hf_model:
+  - name: "Qwen/Qwen3-VL-2B-Instruct"
+    temperature: 0.6
+    top_p: 0.9
+    max_tokens: 128
+
+# Our new task and scenario
+task: "kleister_nda"
+scenario: ["batch", "single"]
+batch_size: [5, 10, 20]
+samples: 500

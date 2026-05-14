@@ -63,9 +63,6 @@ def clean_prediction(prediction: list[str]) -> list[str]:
         # 2) Strip whitespace (including newlines) from both ends
         ans = ans.strip()
 
-        # 3) Remove anything after the first newline (in the stripped string)
-        ans = ans.split("\n", 1)[0]
-
         cleaned.append(ans)
     return cleaned
 

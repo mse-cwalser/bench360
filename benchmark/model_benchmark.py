@@ -497,6 +497,42 @@ class ModelBenchmark:
         elif task == "vision":
             from benchmark.tasks.vision import SimpleVisionTask
             task_ = SimpleVisionTask()
+        elif task == "vrdu_docling":
+            from benchmark.tasks.vrdu import InfoExtractionTask
+            task_ = InfoExtractionTask(ocr_source="ocr_docling")
+        elif task == "vrdu_deepseek":
+            from benchmark.tasks.vrdu import InfoExtractionTask
+            task_ = InfoExtractionTask(ocr_source = "ocr_deepseek")
+        elif task == "vrdu_tesseract":
+            from benchmark.tasks.vrdu import InfoExtractionTask
+            task_ = InfoExtractionTask(ocr_source = "ocr_tesseract")
+        elif task == "vrdu_default":
+            from benchmark.tasks.vrdu import InfoExtractionTask
+            task_ = InfoExtractionTask(ocr_source = "default")
+        elif task == "vrdu_vision":
+            from benchmark.tasks.vrdu_vl import VisualInfoExtractionTask
+            task_ = VisualInfoExtractionTask()
+        elif task == "kleister_nda":
+            from benchmark.tasks.kleister_nda_vl import KleisterNDATask
+            task_ = KleisterNDATask()
+        elif task == "kleister_nda_docling":
+            from benchmark.tasks.kleister_nda_text import KleisterNDATextTask
+            task_ = KleisterNDATextTask(source="ocr_docling")
+        elif task == "kleister_nda_deepseek":
+            from benchmark.tasks.kleister_nda_text import KleisterNDATextTask
+            task_ = KleisterNDATextTask(source = "ocr_deepseek")
+        elif task == "kleister_nda_tesseract":
+            from benchmark.tasks.kleister_nda_text import KleisterNDATextTask
+            task_ = KleisterNDATextTask(source = "ocr_tesseract")
+        elif task == "pdf_ocr":
+            from benchmark.tasks.pdf_ocr import PDFOCRTask
+            task_ = PDFOCRTask()
+        elif task == "vrdu_ocr_ad_buy":
+            from benchmark.tasks.vrdu_ocr import VRDUOCRTask
+            task_ = VRDUOCRTask(sub_dataset="ad-buy-form")
+        elif task == "vrdu_ocr_registration":
+            from benchmark.tasks.vrdu_ocr import VRDUOCRTask
+            task_ = VRDUOCRTask(sub_dataset="registration-form")
         else:
             raise ValueError(f"Task {task!r} not supported.")
 
@@ -611,9 +647,17 @@ class ModelBenchmark:
 
         elif scenario == "batch":
             for ps, rs in self._batch_generator(prompts, refs, batch_size):
+
+                doc_names = [p.get("doc_name", "unknown") if isinstance(p, dict) else "unknown" for p in ps]
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [BATCH] Sending docs: {doc_names}")
+
+
                 t0 = time.time()
                 raw_outs = self.generate(ps)
                 gen_time = time.time() - t0
+
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [BATCH] Finished docs: {doc_names}")
+
                 for prompt, ref, raw in zip(ps, rs, raw_outs):
                     intermediate_records.append({
                         "prompt": prompt,
@@ -646,9 +690,14 @@ class ModelBenchmark:
 
         else:  # single or other non-server, non-batch scenario
             for prompt, ref in zip(prompts, refs):
+                doc_name = prompt.get("doc_name", "unknown") if isinstance(prompt, dict) else "unknown"
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [SINGLE] Sending doc: {doc_name}")
+
                 t0 = time.time()
                 raw_out = self.generate([prompt])[0]
                 gen_time = time.time() - t0
+
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [SINGLE] Finished doc: {doc_name}")
                 intermediate_records.append({
                     "prompt": prompt,
                     "generated_raw": raw_out,
