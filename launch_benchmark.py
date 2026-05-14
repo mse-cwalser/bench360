@@ -79,10 +79,17 @@ def _run_multi_cfgs(cfgs: List[Dict[str, Any]], verbose: bool = False, dump_serv
     prior_failures = _load_prior_failures()
     has_prior_failures = len(prior_failures) > 0
 
-
     # Combine + de-duplicate
     all_runs = {json.dumps(c, sort_keys=True): c for c in cfgs + prior_failures}
-    pending_cfgs = [cfg for cfg in all_runs.values() if not _results_exist(cfg)]
+
+    pending_cfgs = []
+    for cfg in all_runs.values():
+        if _results_exist(cfg):
+            # Output a nice, dim message so it doesn't clutter the console but lets you know it was skipped
+            console.print(
+                f"[dim]⏭  Skipping existing run: {cfg['backend']}/{cfg.get('model_name', 'unknown')} | {cfg['task']}:{cfg['scenario']}[/]")
+        else:
+            pending_cfgs.append(cfg)
 
     MAX_ATTEMPTS = 3
     attempt = 1

@@ -106,12 +106,12 @@ case "$ENGINE" in
     #   vllm/vllm-openai:latest \
     #     --model mistralai/Mistral-7B-Instruct-v0.3 \
     #     --port 23333
-
-    #   
+    # max tokens qwen: 18300
+    # max tokens mistral:
     # ────────────────────────────────────────────────────────────────────────
     docker run --rm \
-      --runtime=nvidia --gpus all \
       --name $NAME \
+      --runtime=nvidia --gpus all \
       -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
       -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
       -p 127.0.0.1:${PORT}:${PORT} \
@@ -119,7 +119,7 @@ case "$ENGINE" in
       vllm/vllm-openai:latest \
         --model "$MODEL" \
         --trust-remote-code \
-        --max-model-len 4096 \
+        --max-model-len 16384 \
         --port "$PORT"
     ;;
 
@@ -170,10 +170,11 @@ case "$ENGINE" in
     #       --context-length 4096
     #   "
     # ────────────────────────────────────────────────────────────────────────
+
     docker run --rm \
       --gpus all \
       --name $NAME \
-      -p 127.0.0.1:${PORT}:${PORT} \
+      --network host \
       -v ~/.cache/huggingface:/root/.cache/huggingface \
       --ipc=host \
       -e HUGGING_FACE_HUB_TOKEN=$HF_TOKEN \
@@ -184,8 +185,10 @@ case "$ENGINE" in
           --model-path $MODEL \
           --host 0.0.0.0 \
           --port $PORT \
+          --context-length 18000
         "
     ;;
+
 
   mii)
     # ────────────────────────────────────────────────────────────────────────
@@ -213,9 +216,83 @@ case "$ENGINE" in
       --port "$PORT"
     ;;
 
+  vllm-ocr2)
+    docker run --rm \
+      --runtime=nvidia --gpus all \
+      --name $NAME \
+      -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+      -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+      -p 127.0.0.1:${PORT}:${PORT} \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+        --model "$MODEL" \
+        --trust-remote-code \
+        --max-model-len 8192 \
+        --port "$PORT" \
+        --gpu-memory-utilization 0.9 \
+        --no-enable-prefix-caching \
+        --logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor
+    ;;
+
+  vllm-vl-test)
+    docker run --rm \
+      --name $NAME \
+      --runtime=nvidia --gpus all \
+      -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+      -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+      -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      -p 127.0.0.1:${PORT}:${PORT} \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+        --model "$MODEL" \
+        --trust-remote-code \
+        --max-model-len 32768 \
+        --quantization fp8 \
+        --port "$PORT" \
+        --gpu-memory-utilization 0.96 \
+        #--chat-template-content-format string─────────────────────────────────────────────────────
+
+    ;;
+
+  vllm-vl)
+    # ────────────────────────────────────────────────────────────────────────
+    # vLLM (OpenAI-compatible) container:
+    #
+    # docker run --rm \
+    #   --runtime=nvidia --gpus all \
+    #   -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+    #   -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+    #   -p 127.0.0.1:23333:23333 \
+    #   --ipc=host \
+    #   vllm/vllm-openai:latest \
+    #     --model mistralai/Mistral-7B-Instruct-v0.3 \
+    #     --port 23333
+
+    #
+    # ───────────────────
+    docker run --rm \
+      --runtime=nvidia --gpus all \
+      --name $NAME \
+      -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+      -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+      -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      -p 127.0.0.1:${PORT}:${PORT} \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+        --model "$MODEL" \
+        --trust-remote-code \
+        --max-model-len 8192 \
+        --port "$PORT" \
+        --gpu-memory-utilization 0.95 \
+        --no-enable-prefix-caching \
+        --limit-mm-per-prompt '{"image": 20}'
+    ;;
+
+
+
   *)
     echo "Error: unsupported engine '$ENGINE'."
-    echo "Please choose one of: tgi, vllm, lmdeploy, sglang, mii."
+    echo "Please choose one of: tgi, vllm, vllm-vl, lmdeploy, sglang, mii."
     exit 1
     ;;
 esac

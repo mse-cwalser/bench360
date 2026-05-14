@@ -1,0 +1,11 @@
+experiment_name: "deepseek_ocr_eval"
+backend: "vllm-ocr2"
+hf_model:
+  name: "deepseek-ai/DeepSeek-OCR-2"
+  temperature: 0.0  # Keep low for OCR tasks to prevent hallucinations
+  top_p: 0.9
+  max_tokens: 4096
+task: ["pdf_ocr"]
+scenario: batch
+batch_size: 40
+samples: 40

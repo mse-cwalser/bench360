@@ -125,14 +125,24 @@ class InferenceEngineClient:
         model_to_use = model or self.model
         formatted_messages = self._format_messages(messages, images)
 
-        resp = self.client.chat.completions.create(
-            model=model_to_use,
-            messages=formatted_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            stream=stream,
-        )
+        # Create your base arguments
+        api_kwargs = {
+            "model": model_to_use,
+            "messages": formatted_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "stream": stream,
+        }
+
+        # Only add chat_template_kwargs if the model isn't a Mistral/Ministral model
+        if "mistral" not in model_to_use.lower():
+            api_kwargs["extra_body"] = {
+                'chat_template_kwargs': {'enable_thinking': False}
+            }
+
+        # Unpack the arguments into the client call
+        resp = self.client.chat.completions.create(**api_kwargs)
 
         if stream:
             return resp
@@ -151,26 +161,34 @@ class InferenceEngineClient:
         """
         Send an asynchronous request to the chat.completions endpoint using AsyncOpenAI.
         """
-        model_to_use = self.model
+        model_to_use = model or self.model
         formatted_messages = self._format_messages(messages, images)
 
-        # Initialize the async client locally to bind to the current event loop safely
-        async_client = AsyncOpenAI(
-            api_key=self.client.api_key,
-            base_url=self.base_url,
-            timeout=httpx.Timeout(60.0)
-        )
+        # 1. Initialize the async client using an async context manager
+        # This ensures all httpx connections are cleanly closed before the event loop ends.
+        async with AsyncOpenAI(
+                api_key=self.client.api_key,
+                base_url=self.base_url,
+                timeout=httpx.Timeout(60.0)
+        ) as async_client:
+            # 2. Define the base parameters that work for all models
+            api_kwargs = {
+                "model": model_to_use,
+                "messages": formatted_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "top_p": top_p,
+            }
 
-        resp = await async_client.chat.completions.create(
-            model=model_to_use,
-            messages=formatted_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-        )
+            # 3. Conditionally add the template arguments ONLY if it's not a Mistral model
+            if "mistral" not in model_to_use.lower():
+                api_kwargs["extra_body"] = {
+                    'chat_template_kwargs': {'enable_thinking': False}
+                }
 
-        await async_client.close()
-        return resp.choices[0].message.content
+            # 4. Unpack the dictionary into the async call using **
+            resp = await async_client.chat.completions.create(**api_kwargs)
+            return resp.choices[0].message.content
 
     def completion(
         self,
