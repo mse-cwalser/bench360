@@ -254,6 +254,26 @@ case "$ENGINE" in
 
     ;;
 
+    vllm-vl-test-noquant)
+    docker run --rm \
+      --name $NAME \
+      --runtime=nvidia --gpus all \
+      -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+      -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+      -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      -p 127.0.0.1:${PORT}:${PORT} \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+        --model "$MODEL" \
+        --trust-remote-code \
+        --max-model-len 17000 \
+        --port "$PORT" \
+        --gpu-memory-utilization 0.96 \
+        #--chat-template-content-format string─────────────────────────────────────────────────────
+
+    ;;
+
+
   vllm-vl)
     # ────────────────────────────────────────────────────────────────────────
     # vLLM (OpenAI-compatible) container:

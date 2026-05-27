@@ -512,7 +512,7 @@ class ModelBenchmark:
         elif task == "vrdu_vision":
             from benchmark.tasks.vrdu_vl import VisualInfoExtractionTask
             task_ = VisualInfoExtractionTask()
-        elif task == "kleister_nda":
+        elif task == "kleister_nda_vision":
             from benchmark.tasks.kleister_nda_vl import KleisterNDATask
             task_ = KleisterNDATask()
         elif task == "kleister_nda_docling":

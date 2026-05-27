@@ -199,40 +199,21 @@ class VisualInfoExtractionTask(BaseTask):
         return f"data:image/jpeg;base64,{encoded}"
 
     def _build_visual_prompt(self, image_paths: List[str], fields: List[str]) -> List[Dict[str, Any]]:
-        # 1. Dynamically generate a JSON template to enforce strict schemas
-        json_template = {field: None for field in fields}
-        template_str = json.dumps(json_template, indent=4).replace("null", "null")
+        fields_str = ", ".join(fields)
+        user_content = [
+            {"type": "text", "text": f"Extract these fields from the images: {fields_str}\nOutput JSON on one line."}
+        ]
 
-        # 2. Split the prompt into System and User roles
-        system_text = "You are an expert document information extraction engine. Output ONLY JSON."
-
-        user_text = (
-            "Your task is to extract specific fields from the provided document images.\n\n"
-            "### EXTRACTION RULES:\n"
-            "- Output ONLY a valid JSON object. Do not include markdown code blocks (like ```json), explanations, or conversational text.\n"
-            "- You must include EXACTLY the keys shown in the OUTPUT TEMPLATE below.\n"
-            "- If a field is not found in the document, set its value to `null`.\n"
-            "- If a field appears multiple times, use a JSON array of unique values in reading order.\n"
-            "- DATES: For `file_date`, look for official 'Received' or 'Filed' stamps. Do not confuse this with signature dates.\n"
-            "- ENTITIES: Context matters. `registrant_name` and `foreign_principle_name` are usually organizations. `signer_name` is an individual person.\n\n"
-            "### OUTPUT TEMPLATE:\n"
-            f"{template_str}\n\n"
-            "Extract the data and provide the final JSON below:"
-        )
-
-        # 3. Construct the Standard OpenAI Vision format
-        content_list = [{"type": "text", "text": user_text}]
-
-        for img_path in image_paths:
-            base64_uri = self._encode_image_to_base64(img_path)
-            content_list.append({
+        for path in image_paths:
+            base64_uri = self._encode_image_to_base64(path)
+            user_content.append({
                 "type": "image_url",
                 "image_url": {"url": base64_uri}
             })
 
         return [
-            {"role": "system", "content": system_text},
-            {"role": "user", "content": content_list}
+            {"role": "system", "content": "You are an information extraction engine. Output ONLY JSON."},
+            {"role": "user", "content": user_content},
         ]
 
     # ----------------------------

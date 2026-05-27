@@ -4,6 +4,7 @@ import json
 import glob
 import lzma
 import random
+import base64
 import subprocess
 from typing import Any, Dict, List, Tuple, Union, Optional, Literal
 from benchmark.utils import normalize_answer
@@ -206,7 +207,7 @@ class KleisterNDATask(BaseTask):
             "subset_em": 1.0 if f1 == 1.0 else 0.0,
             "field_f1": f1,
             "field_em": precision,
-            "num_pages": num_pages  # <-- Added here!
+            "num_pages": num_pages
         }
 
     # ----------------------------
@@ -256,7 +257,13 @@ class KleisterNDATask(BaseTask):
 
         return image_files
 
-    def _build_visual_prompt(self, image_paths: List[str], fields: List[str]) -> Dict[str, Any]:
+    def _encode_image_to_base64(self, image_path: str) -> str:
+        """Helper to convert local images to Base64 Data URIs."""
+        with open(image_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:image/jpeg;base64,{encoded}"
+
+    def _build_visual_prompt(self, image_paths: List[str], fields: List[str]) -> List[Dict[str, Any]]:
         fields_str = ", ".join(fields)
 
         # Dictionary containing the guidelines for all possible fields
@@ -284,16 +291,21 @@ class KleisterNDATask(BaseTask):
             f"Field Guidelines:\n{requested_descriptions}\n"
         )
 
-        prompt_text = (
-            f"{system_message}\n"
-            f"Requested keys:\n{fields_str}\n\n"
-            f"Output JSON:"
-        )
+        user_content = [
+            {"type": "text", "text": f"Extract these fields from the images: {fields_str}\nOutput JSON on one line."}
+        ]
 
-        return {
-            "messages": prompt_text,
-            "images": image_paths
-        }
+        for path in image_paths:
+            base64_uri = self._encode_image_to_base64(path)
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": base64_uri}
+            })
+
+        return [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_content},
+        ]
 
     # ----------------------------
     # Utilities
@@ -316,11 +328,33 @@ class KleisterNDATask(BaseTask):
 
 
 if __name__ == "__main__":
-    print("--- Testing Kleister NDA Task ---")
-    task = KleisterNDATask()
-    print(f"Loaded {len(task.entries)} entries.")
+    print("--- Testing Kleister NDA Task & Pre-generating Images ---")
 
-    prompts, references = task.generate_prompts(num_examples=1)
-    if prompts:
-        print("\nSample Reference JSON:\n", references[0])
-        print(f"\nExtracted {len(prompts[0]['images'])} images for this prompt.")
+    try:
+        task = KleisterNDATask()
+        print(f"Loaded {len(task.entries)} entries.")
+        print("Starting PDF to JPEG conversion for all documents. This might take a minute...")
+
+        # Iterate through all entries to trigger the lazy-rendering logic for everything
+        successful_renders = 0
+        for i, entry in enumerate(task.entries):
+            images = task._get_image_paths(entry)
+            if images:
+                successful_renders += 1
+
+            # Print progress every 10 documents
+            if (i + 1) % 10 == 0 or (i + 1) == len(task.entries):
+                print(f"Processed {i + 1}/{len(task.entries)} documents...")
+
+        print(f"Done! Successfully generated/verified images for {successful_renders} documents.")
+
+        # Test a single prompt generation just to verify the output format
+        print("\n--- Testing Prompt Generation for 1 Example ---")
+        prompts, references = task.generate_prompts(num_examples=1)
+        if prompts:
+            print("Success! Prompt format is valid.")
+            print(f"Extracted {len(prompts[0][1]['content']) - 1} images for this prompt.")
+            print("\nSample Reference JSON:\n", references[0])
+
+    except Exception as e:
+        print(f"Error during execution: {e}")
