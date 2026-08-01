@@ -1,0 +1,16 @@
+Level,Metric / Entity Key,Precision,Recall,F1 Score,Support / Extra Info
+Entity,effective_date,0.9536,0.9536,0.9536,237
+Entity,jurisdiction,1.0000,1.0000,1.0000,332
+Entity,party,0.8149,0.8149,0.8149,335
+Entity,term,0.9224,0.9224,0.9224,116
+
+Macro,avg_calculated_document_f1,,,0.9378,Value-Level F1 Matrix
+Macro,avg_calculated_field_em,,,0.9191,Strict Exact Field Match Precision
+Macro,avg_calculated_fuzzy_score,,,0.9795,Fuzzy Token Sort Match Evaluation
+
+Macro,Average Entity F1,,,0.9227,
+Macro,Average Field F1,,,0.9191,
+Macro,Average Field EM,,,0.9191,
+Macro,Subset Exact Match,,,0.7715,
+
+Micro,Overall Micro Metrics,0.9196,0.9196,0.9196,TP: 938 | FP: 82 | FN: 82
