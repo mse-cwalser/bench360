@@ -26,6 +26,7 @@ import sys
 import traceback
 import warnings
 from pathlib import Path
+from time import sleep
 from typing import Any, Dict, List, Tuple
 from rich.live import Live
 from rich.panel import Panel
@@ -220,6 +221,8 @@ def _run_one(cfg: Dict[str, Any], bm: ModelBenchmark):
         quality_metric=cfg.get("quality_metric", True),
     )
     _save_results(report, details, readings, cfg)
+    print("sleeping 2min")
+    sleep(120)
     return report
 
 # ── Multi‑run orchestration with retry logic ────────────────────────────────
