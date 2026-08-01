@@ -7,8 +7,8 @@ import subprocess
 from typing import Any, Dict, List, Tuple, Literal
 
 from benchmark.tasks.base_task import BaseTask
-from benchmark.utils import normalize_answer
-
+from benchmark.utils import normalize_answer, safe_json_loads
+from benchmark.kleister_utils import compute_kleister_metrics
 
 class KleisterNDATextTask(BaseTask):
     """
@@ -59,7 +59,7 @@ class KleisterNDATextTask(BaseTask):
     # Data Loading (TSV Parsing - All Splits)
     # ----------------------------
     def _load_dataset(self) -> List[Dict[str, Any]]:
-        splits = ["train", "dev-0", "test-A"]
+        splits = ["train", "dev-0"]
         entries = []
 
         for split in splits:
@@ -93,16 +93,14 @@ class KleisterNDATextTask(BaseTask):
                         gold_dict = {}
 
                         for k, v in matches:
-                            # Convert the underscores back into spaces for exact-match comparisons
-                            v_clean = v.replace('_', ' ')
-
+                            # We keep 'v' exactly as it is, maintaining YYYY-MM-DD and {number}_{units}
                             if k in gold_dict:
                                 if isinstance(gold_dict[k], list):
-                                    gold_dict[k].append(v_clean)
+                                    gold_dict[k].append(v)
                                 else:
-                                    gold_dict[k] = [gold_dict[k], v_clean]
+                                    gold_dict[k] = [gold_dict[k], v]
                             else:
-                                gold_dict[k] = v_clean
+                                gold_dict[k] = v
 
                         entries.append({
                             "filename": filename,
@@ -120,10 +118,19 @@ class KleisterNDATextTask(BaseTask):
         prompts: List[Any] = []
         references: List[str] = []
 
+        # Safe limit for a 32k token context window
+        MAX_WORDS = 14000
+
         for ex in sample:
             document_text = self._get_markdown_text(ex)
             if not document_text:
                 continue
+
+            # --- NEW: Truncate document text ---
+            words = document_text.split()
+            if len(words) > MAX_WORDS:
+                document_text = " ".join(words[:MAX_WORDS])
+            # -----------------------------------
 
             gold_dict = ex.get("annotations", {})
 
@@ -135,8 +142,8 @@ class KleisterNDATextTask(BaseTask):
 
             trimmed_fields = {field: gold_dict[field] for field in present_fields}
 
-            # INJECT DOCUMENT LENGTH METADATA (Words instead of pages for text models)
-            trimmed_fields["__num_words__"] = len(document_text.split())
+            # INJECT DOCUMENT LENGTH METADATA
+            trimmed_fields["__num_words__"] = len(words)  # Track original length
 
             messages = self._build_text_prompt(document_text, present_fields)
 
@@ -146,64 +153,14 @@ class KleisterNDATextTask(BaseTask):
         return prompts, references
 
     def quality_metrics(self, generated: str, reference: str) -> Dict[str, float]:
-        from dateutil import parser
-
-        gold = self._safe_json_loads(reference)
-        pred = self._safe_json_loads(generated)
+        gold = safe_json_loads(reference)
+        pred = safe_json_loads(generated)
 
         gold = gold if isinstance(gold, dict) else {}
         pred = pred if isinstance(pred, dict) else {}
 
-        # 1. Extract metadata and remove it so it doesn't break scoring
-        num_words = gold.pop("__num_words__", 0)
-        pred.pop("__num_words__", None)  # Just in case the model hallucinates it
-
-        tp, fp, fn = 0, 0, 0
-
-        def normalize_date(date_str: str) -> str:
-            if not date_str: return ""
-            try:
-                parsed = parser.parse(date_str, fuzzy=True)
-                return parsed.strftime("%Y-%m-%d")
-            except (ValueError, TypeError, OverflowError):
-                return date_str
-
-        for key, gt_val in gold.items():
-            if gt_val in [None, ""]: continue
-            pred_val = pred.get(key)
-
-            if pred_val in [None, ""]:
-                fn += 1
-            else:
-                list_gt = self._to_list_of_str(gt_val)
-                list_pred = self._to_list_of_str(pred_val)
-
-                if key == "effective_date":
-                    list_gt = [normalize_date(x) for x in list_gt]
-                    list_pred = [normalize_date(x) for x in list_pred]
-
-                norm_gt = [normalize_answer(x) for x in list_gt]
-                norm_pred = [normalize_answer(x) for x in list_pred]
-
-                if sorted(norm_gt) == sorted(norm_pred):
-                    tp += 1
-                else:
-                    fp += 1
-
-        for pred_key in pred:
-            if pred_key not in gold and pred.get(pred_key) not in [None, ""]:
-                fp += 1
-
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-
-        return {
-            "subset_em": 1.0 if f1 == 1.0 else 0.0,
-            "field_f1": f1,
-            "field_em": precision,
-            "num_words": num_words  # Text-equivalent to num_pages
-        }
+        # Call the extracted utility function
+        return compute_kleister_metrics(gold, pred, self.target_fields)
 
     # ----------------------------
     # Text Prompting & Markdown Loading
@@ -261,17 +218,6 @@ class KleisterNDATextTask(BaseTask):
     # ----------------------------
     # Utilities
     # ----------------------------
-    def _safe_json_loads(self, s: str) -> Any:
-        try:
-            return json.loads(s)
-        except:
-            start, end = s.find("{"), s.rfind("}")
-            if -1 < start < end:
-                try:
-                    return json.loads(s[start:end + 1])
-                except:
-                    pass
-        return {}
 
     def _to_list_of_str(self, v: Any) -> List[str]:
         if v is None: return []

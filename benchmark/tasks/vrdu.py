@@ -3,7 +3,9 @@ import json
 import gzip
 import glob
 import random
+import string
 import subprocess
+from thefuzz import fuzz
 from typing import Any, Dict, List, Tuple, Union, Literal, Optional
 
 from benchmark.tasks.base_task import BaseTask
@@ -89,10 +91,8 @@ class InfoExtractionTask(BaseTask):
             messages = self._build_prompt(ocr_text, list(trimmed_fields.keys()))
             ref_json = json.dumps(trimmed_fields, ensure_ascii=False, sort_keys=True)
 
-            # Extract the filename from the dataset entry
             pdf_filename = ex.get("filename") or ex.get("file_name") or "unknown_doc"
 
-            # Pass as a dictionary so we can carry the metadata
             prompts.append({
                 "messages": messages,
                 "doc_name": pdf_filename
@@ -102,45 +102,85 @@ class InfoExtractionTask(BaseTask):
         return prompts, references
 
     def quality_metrics(self, generated: str, reference: str) -> Dict[str, float]:
-        gold = self._safe_json_loads(reference)
-        pred = self._safe_json_loads(generated)
+        gold_raw = self._safe_json_loads(reference)
+        pred_raw = self._safe_json_loads(generated)
 
-        gold = gold if isinstance(gold, dict) else {}
-        pred = pred if isinstance(pred, dict) else {}
+        gold_raw = gold_raw if isinstance(gold_raw, dict) else {}
+        pred_raw = pred_raw if isinstance(pred_raw, dict) else {}
 
-        tp, fp, fn = 0, 0, 0
+        # Normalize outputs dynamically
+        gold = {k: self._normalize_value(v) for k, v in gold_raw.items()}
+        pred = {k: self._normalize_value(v) for k, v in pred_raw.items()}
 
-        # 1. Evaluate keys present in Ground Truth
-        for key, gt_val in gold.items():
-            if gt_val in [None, ""]: continue
-            pred_val = pred.get(key)
+        tp_val = 0
+        fp_val = 0
+        fn_val = 0
 
-            if pred_val in [None, ""]:
-                fn += 1
+        tp_field = 0
+        fp_field = 0
+        fn_field = 0
+
+        fuzzy_scores = []
+
+        all_keys = set(pred.keys()).union(set(gold.keys()))
+
+        for k in all_keys:
+            gen_list = pred.get(k, [])
+            ref_list = gold.get(k, [])
+
+            gen_set = set(gen_list)
+            ref_set = set(ref_list)
+
+            if not ref_set and not gen_set:
+                continue
+
+            # 1. Field-level Tracking (field_em)
+            if ref_set == gen_set:
+                tp_field += 1
             else:
-                norm_gt = self._to_list_of_str(gt_val)
-                norm_pred = self._to_list_of_str(pred_val)
-                if sorted(norm_gt) == sorted(norm_pred):
-                    tp += 1
+                if not ref_set and gen_set:
+                    fp_field += 1
+                elif ref_set and not gen_set:
+                    fn_field += 1
                 else:
-                    fp += 1
+                    fp_field += 1
+                    fn_field += 1
 
-        # 2. Handle Extra Keys in Predictions (Hallucinations)
-        for pred_key in pred:
-            if pred_key not in gold and pred.get(pred_key) not in [None, ""]:
-                fp += 1
+            # 2. Value-level Tracking (F1)
+            tp_val += len(gen_set.intersection(ref_set))
+            fp_val += len(gen_set - ref_set)
+            fn_val += len(ref_set - gen_set)
 
-        # 3. Calculate F1
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            # 3. Fuzzy Matching Tracking
+            if not ref_set or not gen_set:
+                fuzzy_scores.append(0.0)
+            else:
+                gen_str = " ".join(sorted(gen_list))
+                ref_str = " ".join(sorted(ref_list))
+                score = fuzz.token_sort_ratio(gen_str, ref_str) / 100.0
+                fuzzy_scores.append(score)
+
+        if tp_field == 0 and fp_field == 0 and fn_field == 0:
+            return {
+                "document_f1": 1.0,
+                "field_em": 1.0,
+                "fuzzy_score": 1.0,
+                "subset_em": 1.0
+            }
+
+        precision_val = tp_val / (tp_val + fp_val) if (tp_val + fp_val) > 0 else 0.0
+        recall_val = tp_val / (tp_val + fn_val) if (tp_val + fn_val) > 0 else 0.0
+        f1 = 2 * precision_val * recall_val / (precision_val + recall_val) if (precision_val + recall_val) > 0 else 0.0
+
+        field_em = tp_field / (tp_field + fp_field) if (tp_field + fp_field) > 0 else 0.0
+
+        avg_fuzzy = sum(fuzzy_scores) / len(fuzzy_scores) if fuzzy_scores else 0.0
 
         return {
             "subset_em": 1.0 if f1 == 1.0 else 0.0,
-            "field_f1": f1,
-            "field_em": precision,
-            "field_substring": 0.0,
-            "field_fuzzy": 0.0,
+            "document_f1": f1,
+            "field_em": field_em,
+            "fuzzy_score": avg_fuzzy
         }
 
     # ----------------------------
@@ -174,6 +214,22 @@ class InfoExtractionTask(BaseTask):
     # ----------------------------
     # Utilities
     # ----------------------------
+    def _normalize_value(self, val: Any) -> List[str]:
+        """Recursively normalizes strings/lists for VRDU fields."""
+        if val is None:
+            return []
+        if isinstance(val, list):
+            res = []
+            for v in val:
+                res.extend(self._normalize_value(v))
+            return res
+        if isinstance(val, (str, int, float)):
+            s = str(val).upper().replace('_', ' ')
+            s = s.translate(str.maketrans('', '', string.punctuation))
+            s = " ".join(s.split())
+            return [s]
+        return []
+
     def _pick_jsonl(self, main_dir: str) -> Union[str, None]:
         for f in ["dataset.jsonl.gz", "dataset.jsonl"]:
             p = os.path.join(main_dir, f)
@@ -193,13 +249,11 @@ class InfoExtractionTask(BaseTask):
         return res
 
     def _extract_ocr_text(self, ex: Dict[str, Any], *, add_page_headers: bool = True) -> str:
-        # --- Handle custom OCR sources (.md files) ---
         if self.ocr_source != "default":
             main_dir = ex.get("_main_dir", "")
             pdf_filename = ex.get("filename") or ex.get("file_name") or ""
 
             if pdf_filename:
-                # Swap .pdf for .md
                 base_name = os.path.splitext(pdf_filename)[0]
                 md_path = os.path.join(main_dir, self.ocr_source, f"{base_name}.md")
 
@@ -210,16 +264,13 @@ class InfoExtractionTask(BaseTask):
                 else:
                     print(f"[dim]⚠️  MD file not found: {md_path}. Falling back to default OCR.[/dim]")
 
-        # --- Fallback to default JSON-based OCR ---
         ocr = ex.get("ocr") or {}
 
-        # 1. Fallback for when OCR is just a raw string/primitive
         if not isinstance(ocr, dict):
             return str(ocr)
 
         pages = ocr.get("pages")
 
-        # 2. Fallback for when there are no individual pages, just a bulk text block
         if not isinstance(pages, list) or not pages:
             return " ".join(str(ocr.get("text", "")).split())
 
@@ -229,12 +280,10 @@ class InfoExtractionTask(BaseTask):
         for pi, p in enumerate(pages, start=1):
             if not isinstance(p, dict): continue
 
-            # Simple paragraph extractor fallback
             blocks = p.get("blocks") or p.get("paragraphs") or p.get("lines") or []
             items = [it for it in blocks if isinstance(it, dict) and it.get("text", "").strip()]
             if not items: continue
 
-            # Read-order sort
             items = sorted(items,
                            key=lambda it: it.get("bbox", [1e9] * 4)[1] if isinstance(it.get("bbox"), list) else 1e9)
 

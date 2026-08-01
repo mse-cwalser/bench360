@@ -4,7 +4,9 @@ import gzip
 import glob
 import random
 import base64
+import string
 import subprocess
+from thefuzz import fuzz
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Tuple, Union, Optional, Literal
 
@@ -14,7 +16,6 @@ except ImportError:
     fitz = None
 
 from benchmark.tasks.base_task import BaseTask
-from benchmark.utils import normalize_answer
 
 
 class VisualInfoExtractionTask(BaseTask):
@@ -106,37 +107,85 @@ class VisualInfoExtractionTask(BaseTask):
         return prompts, references
 
     def quality_metrics(self, generated: str, reference: str) -> Dict[str, float]:
-        gold = self._safe_json_loads(reference)
-        pred = self._safe_json_loads(generated)
-        gold, pred = (gold if isinstance(gold, dict) else {}), (pred if isinstance(pred, dict) else {})
+        gold_raw = self._safe_json_loads(reference)
+        pred_raw = self._safe_json_loads(generated)
 
-        gold_fields = set(gold.keys())
-        per_field_em, per_field_f1, per_field_sub, per_field_fuzzy = [], [], [], []
+        gold_raw = gold_raw if isinstance(gold_raw, dict) else {}
+        pred_raw = pred_raw if isinstance(pred_raw, dict) else {}
 
-        for f in gold_fields:
-            gold_vals = self._to_list_of_str(gold.get(f, []))
-            pred_vals = self._to_list_of_str(pred.get(f, []))
+        # Normalize outputs dynamically
+        gold = {k: self._normalize_value(v) for k, v in gold_raw.items()}
+        pred = {k: self._normalize_value(v) for k, v in pred_raw.items()}
 
-            if len(pred_vals) == 0:
-                per_field_em.append(0.0)
-                per_field_f1.append(0.0)
-                per_field_sub.append(1.0 if len(gold_vals) == 0 else 0.0)
-                per_field_fuzzy.append(1.0 if len(gold_vals) == 0 else 0.0)
+        tp_val = 0
+        fp_val = 0
+        fn_val = 0
+
+        tp_field = 0
+        fp_field = 0
+        fn_field = 0
+
+        fuzzy_scores = []
+
+        all_keys = set(pred.keys()).union(set(gold.keys()))
+
+        for k in all_keys:
+            gen_list = pred.get(k, [])
+            ref_list = gold.get(k, [])
+
+            gen_set = set(gen_list)
+            ref_set = set(ref_list)
+
+            if not ref_set and not gen_set:
                 continue
 
-            per_field_em.append(self._field_exact_em(gold_vals, pred_vals))
-            per_field_f1.append(self._field_token_f1(gold_vals, pred_vals))
-            per_field_sub.append(self._field_substring_match(gold_vals, pred_vals))
-            per_field_fuzzy.append(self._field_fuzzy_similarity(gold_vals, pred_vals))
+            # 1. Field-level Tracking (field_em)
+            if ref_set == gen_set:
+                tp_field += 1
+            else:
+                if not ref_set and gen_set:
+                    fp_field += 1
+                elif ref_set and not gen_set:
+                    fn_field += 1
+                else:
+                    fp_field += 1
+                    fn_field += 1
 
-        avg = lambda x: sum(x) / len(x) if x else 0.0
-        field_em = avg(per_field_em)
+            # 2. Value-level Tracking (F1)
+            tp_val += len(gen_set.intersection(ref_set))
+            fp_val += len(gen_set - ref_set)
+            fn_val += len(ref_set - gen_set)
+
+            # 3. Fuzzy Matching Tracking
+            if not ref_set or not gen_set:
+                fuzzy_scores.append(0.0)
+            else:
+                gen_str = " ".join(sorted(gen_list))
+                ref_str = " ".join(sorted(ref_list))
+                score = fuzz.token_sort_ratio(gen_str, ref_str) / 100.0
+                fuzzy_scores.append(score)
+
+        if tp_field == 0 and fp_field == 0 and fn_field == 0:
+            return {
+                "document_f1": 1.0,
+                "field_em": 1.0,
+                "fuzzy_score": 1.0,
+                "subset_em": 1.0
+            }
+
+        precision_val = tp_val / (tp_val + fp_val) if (tp_val + fp_val) > 0 else 0.0
+        recall_val = tp_val / (tp_val + fn_val) if (tp_val + fn_val) > 0 else 0.0
+        f1 = 2 * precision_val * recall_val / (precision_val + recall_val) if (precision_val + recall_val) > 0 else 0.0
+
+        field_em = tp_field / (tp_field + fp_field) if (tp_field + fp_field) > 0 else 0.0
+
+        avg_fuzzy = sum(fuzzy_scores) / len(fuzzy_scores) if fuzzy_scores else 0.0
+
         return {
-            "subset_em": 1.0 if field_em == 1.0 else 0.0,
+            "subset_em": 1.0 if f1 == 1.0 else 0.0,
+            "document_f1": f1,
             "field_em": field_em,
-            "field_f1": avg(per_field_f1),
-            "field_substring": avg(per_field_sub),
-            "field_fuzzy": avg(per_field_fuzzy),
+            "fuzzy_score": avg_fuzzy
         }
 
     # ----------------------------
@@ -153,16 +202,13 @@ class VisualInfoExtractionTask(BaseTask):
         folder_name = os.path.splitext(raw_name)[0]
         doc_img_dir = os.path.join(jpg_root, folder_name)
 
-        # 1. Check if we already rendered this PDF to JPEG
         if os.path.isdir(doc_img_dir):
             image_files = sorted(glob.glob(os.path.join(doc_img_dir, "*.jpg")))
             if image_files:
                 return image_files[:self.max_pages]
 
-        # 2. If no JPEGs exist, we need to generate them from the PDF
         pdf_path = os.path.join(pdf_root, f"{folder_name}.pdf")
         if not os.path.exists(pdf_path):
-            # Fallback check just in case the raw_name includes the extension
             pdf_path = os.path.join(pdf_root, raw_name)
             if not os.path.exists(pdf_path):
                 print(f"[dim]⚠️  PDF not found for {folder_name}[/dim]")
@@ -172,16 +218,13 @@ class VisualInfoExtractionTask(BaseTask):
             raise ImportError(
                 "PyMuPDF (fitz) is required to render PDFs to images. Install it via: pip install PyMuPDF")
 
-        # Create the image directory for caching
         os.makedirs(doc_img_dir, exist_ok=True)
         image_files = []
 
         try:
             doc = fitz.open(pdf_path)
-            # Render up to max_pages
             for page_num in range(min(len(doc), self.max_pages)):
                 page = doc.load_page(page_num)
-                # 150 DPI is a great sweet spot for LMMs (readable text, smaller payload)
                 pix = page.get_pixmap(dpi=120)
                 img_path = os.path.join(doc_img_dir, f"page_{page_num:03d}.jpg")
                 pix.save(img_path)
@@ -193,7 +236,6 @@ class VisualInfoExtractionTask(BaseTask):
         return image_files
 
     def _encode_image_to_base64(self, image_path: str) -> str:
-        """Helper to convert local images to Base64 Data URIs."""
         with open(image_path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
         return f"data:image/jpeg;base64,{encoded}"
@@ -219,6 +261,22 @@ class VisualInfoExtractionTask(BaseTask):
     # ----------------------------
     # Utilities
     # ----------------------------
+    def _normalize_value(self, val: Any) -> List[str]:
+        """Recursively normalizes strings/lists for VRDU fields."""
+        if val is None:
+            return []
+        if isinstance(val, list):
+            res = []
+            for v in val:
+                res.extend(self._normalize_value(v))
+            return res
+        if isinstance(val, (str, int, float)):
+            s = str(val).upper().replace('_', ' ')
+            s = s.translate(str.maketrans('', '', string.punctuation))
+            s = " ".join(s.split())
+            return [s]
+        return []
+
     def _extract_gold_fields(self, ex: Dict[str, Any]) -> Dict[str, Union[str, List[str]]]:
         ann = ex.get("annotations")
         if not ann: return {}
@@ -313,48 +371,11 @@ class VisualInfoExtractionTask(BaseTask):
         if v is None: return []
         return [str(x) for x in v] if isinstance(v, list) else [str(v)]
 
-    def _token_f1(self, gold: str, preds: List[str]) -> float:
-        g = normalize_answer(gold).split()
-        if not g: return 1.0 if not any(normalize_answer(p).split() for p in preds) else 0.0
-        best = 0.0
-        for p in preds:
-            pt = normalize_answer(p).split()
-            if not pt: continue
-            common = set(g) & set(pt)
-            pr, re = len(common) / len(pt), len(common) / len(g)
-            f1 = (2 * pr * re) / (pr + re) if (pr + re) > 0 else 0.0
-            best = max(best, f1)
-        return best
-
-    def _field_exact_em(self, g_vals: List[str], p_vals: List[str]) -> float:
-        gn = set(normalize_answer(v) for v in g_vals if v)
-        pn = set(normalize_answer(v) for v in p_vals if v)
-        return 1.0 if gn == pn else 0.0
-
-    def _field_token_f1(self, g_vals: List[str], p_vals: List[str]) -> float:
-        if not g_vals: return 1.0 if not p_vals else 0.0
-        scores = [self._token_f1(gv, p_vals) for gv in g_vals]
-        return sum(scores) / len(scores)
-
-    def _field_substring_match(self, g_vals: List[str], p_vals: List[str]) -> float:
-        gn = [normalize_answer(v) for v in g_vals if v]
-        pn = [normalize_answer(v) for v in p_vals if v]
-        if not gn: return 1.0 if not pn else 0.0
-        return sum(1.0 if any(g in p for p in pn) else 0.0 for g in gn) / len(gn)
-
-    def _field_fuzzy_similarity(self, g_vals: List[str], p_vals: List[str]) -> float:
-        gn = [normalize_answer(v) for v in g_vals if v]
-        pn = [normalize_answer(v) for v in p_vals if v]
-        if not gn or not pn: return 1.0 if not gn and not pn else 0.0
-        return sum(max(SequenceMatcher(None, g, p).ratio() for p in pn) for g in gn) / len(gn)
-
 
 if __name__ == "__main__":
     print("--- Testing Visual Info Extraction Task & Pre-generating Images ---")
 
     try:
-        # Instantiate the task (this will auto-download the dataset if missing)
-        # Assuming you run this from the root of your project
         task = VisualInfoExtractionTask(
             base_path="../data/vrdu",
             dataset_name="registration",
@@ -364,21 +385,17 @@ if __name__ == "__main__":
         print(f"Successfully loaded {len(task.entries)} entries.")
         print("Starting PDF to JPEG conversion for all documents. This might take a minute...")
 
-        # Iterate through all entries to trigger the lazy-rendering logic for everything
         successful_renders = 0
         for i, entry in enumerate(task.entries):
-            # This calls the method that checks for JPGs and generates them if missing
             images = task._get_image_paths(entry)
             if images:
                 successful_renders += 1
 
-            # Print progress every 10 documents
             if (i + 1) % 10 == 0 or (i + 1) == len(task.entries):
                 print(f"Processed {i + 1}/{len(task.entries)} documents...")
 
         print(f"Done! Successfully generated/verified images for {successful_renders} documents.")
 
-        # Test a single prompt generation just to verify the output format
         print("\n--- Testing Prompt Generation for 1 Example ---")
         prompts, references = task.generate_prompts(num_examples=1)
         if prompts:

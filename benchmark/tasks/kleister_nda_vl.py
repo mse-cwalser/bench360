@@ -7,7 +7,9 @@ import random
 import base64
 import subprocess
 from typing import Any, Dict, List, Tuple, Union, Optional, Literal
-from benchmark.utils import normalize_answer
+from benchmark.utils import normalize_answer, safe_json_loads
+from benchmark.kleister_utils import compute_kleister_metrics
+
 
 try:
     import fitz  # PyMuPDF
@@ -25,9 +27,9 @@ class KleisterNDATask(BaseTask):
     api_type: Literal["completion", "chat_completion"] = "chat_completion"
 
     def __init__(self, base_path: str = "./benchmark/data/kleister-nda",
-                 split: Literal["train", "dev-0", "test-A"] = "train",
+                 split: Literal["train", "dev-0"] = "train",
                  seed: int = 42,
-                 max_pages: int = 20):
+                 max_pages: int = 10):
         super().__init__()
         random.seed(seed)
         self.base_path = os.path.abspath(base_path)
@@ -97,16 +99,14 @@ class KleisterNDATask(BaseTask):
                     gold_dict = {}
 
                     for k, v in matches:
-                        # Convert the underscores back into spaces for exact-match comparisons
-                        v_clean = v.replace('_', ' ')
-
+                        # We keep 'v' exactly as it is, maintaining YYYY-MM-DD and {number}_{units}
                         if k in gold_dict:
                             if isinstance(gold_dict[k], list):
-                                gold_dict[k].append(v_clean)
+                                gold_dict[k].append(v)
                             else:
-                                gold_dict[k] = [gold_dict[k], v_clean]
+                                gold_dict[k] = [gold_dict[k], v]
                         else:
-                            gold_dict[k] = v_clean
+                            gold_dict[k] = v
 
                     entries.append({
                         "filename": filename,
@@ -151,65 +151,14 @@ class KleisterNDATask(BaseTask):
         return prompts, references
 
     def quality_metrics(self, generated: str, reference: str) -> Dict[str, float]:
-        from dateutil import parser
-
-        gold = self._safe_json_loads(reference)
-        pred = self._safe_json_loads(generated)
+        gold = safe_json_loads(reference)
+        pred = safe_json_loads(generated)
 
         gold = gold if isinstance(gold, dict) else {}
         pred = pred if isinstance(pred, dict) else {}
 
-        # 1. Extract metadata and remove it so it doesn't break scoring
-        num_pages = gold.pop("__num_pages__", 0)
-        pred.pop("__num_pages__", None)  # Just in case the model hallucinates it
-
-        tp, fp, fn = 0, 0, 0
-
-        def normalize_date(date_str: str) -> str:
-            if not date_str: return ""
-            try:
-                parsed = parser.parse(date_str, fuzzy=True)
-                return parsed.strftime("%Y-%m-%d")
-            except (ValueError, TypeError, OverflowError):
-                return date_str
-
-        for key, gt_val in gold.items():
-            if gt_val in [None, ""]: continue
-            pred_val = pred.get(key)
-
-            if pred_val in [None, ""]:
-                fn += 1
-            else:
-                list_gt = self._to_list_of_str(gt_val)
-                list_pred = self._to_list_of_str(pred_val)
-
-                if key == "effective_date":
-                    list_gt = [normalize_date(x) for x in list_gt]
-                    list_pred = [normalize_date(x) for x in list_pred]
-
-                norm_gt = [normalize_answer(x) for x in list_gt]
-                norm_pred = [normalize_answer(x) for x in list_pred]
-
-                if sorted(norm_gt) == sorted(norm_pred):
-                    tp += 1
-                else:
-                    fp += 1
-
-        for pred_key in pred:
-            if pred_key not in gold and pred.get(pred_key) not in [None, ""]:
-                fp += 1
-
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-
-        return {
-            "subset_em": 1.0 if f1 == 1.0 else 0.0,
-            "field_f1": f1,
-            "field_em": precision,
-            "num_pages": num_pages
-        }
-
+        # Call the extracted utility function
+        return compute_kleister_metrics(gold, pred, self.target_fields)
     # ----------------------------
     # Visual Prompting & Rendering
     # ----------------------------
@@ -306,25 +255,6 @@ class KleisterNDATask(BaseTask):
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_content},
         ]
-
-    # ----------------------------
-    # Utilities
-    # ----------------------------
-    def _safe_json_loads(self, s: str) -> Any:
-        try:
-            return json.loads(s)
-        except:
-            start, end = s.find("{"), s.rfind("}")
-            if -1 < start < end:
-                try:
-                    return json.loads(s[start:end + 1])
-                except:
-                    pass
-        return {}
-
-    def _to_list_of_str(self, v: Any) -> List[str]:
-        if v is None: return []
-        return [str(x) for x in v] if isinstance(v, list) else [str(v)]
 
 
 if __name__ == "__main__":
