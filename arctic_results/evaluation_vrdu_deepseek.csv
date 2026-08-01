@@ -1,0 +1,14 @@
+Level,Entity Key / Metric,Exact Match,Token F1,Substring Match,Fuzzy Match,Support / Info
+Entity,file_date,0.2804,0.2814,0.2804,0.4845,485
+Entity,foreign_principle_name,0.2590,0.5357,0.3672,0.6304,305
+Entity,registrant_name,0.6579,0.7957,0.6720,0.8753,497
+Entity,registration_num,0.8222,0.8273,0.8495,0.8838,495
+Entity,signer_name,0.5515,0.6656,0.5698,0.7826,437
+Entity,signer_title,0.6700,0.7443,0.7375,0.7983,400
+
+Macro,avg_calculated_document_f1,,,,0.5496,Value-Level F1 Matrix
+Macro,avg_calculated_field_em,,,,0.5481,Strict Exact Field Match Precision
+Macro,avg_calculated_fuzzy_score,,,,0.7449,Fuzzy Token Sort Match Evaluation
+
+Macro,Average Field Metrics,0.5481,0.6342,0.5810,0.7411,
+Macro,Subset Exact Match,0.0500,,,,Requires perfect EM on all doc fields

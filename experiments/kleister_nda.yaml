@@ -1,0 +1,41 @@
+experiment_name: "kleister_nda"
+backend: ["vllm", "sglang"]
+
+hf_model:
+  - name: "Qwen/Qwen3-0.6B"
+    temperature: 0.6
+    top_p: 0.9
+    max_tokens: 128
+  - name: "Qwen/Qwen3-1.7B"
+    temperature: 0.6
+    top_p: 0.9
+    max_tokens: 128
+  - name: "Qwen/Qwen3-4B"
+    temperature: 0.6
+    top_p: 0.9
+    max_tokens: 128
+  - name: "Qwen/Qwen3-8B"
+    temperature: 0.6
+    top_p: 0.9
+    max_tokens: 128
+  - name: "meta-llama/Llama-3.2-1B-Instruct"
+    temperature: 0.6
+    top_p: 0.9
+    max_tokens: 128
+  - name: "meta-llama/Llama-3.2-3B-Instruct"
+    temperature: 0.6
+    top_p: 0.9
+    max_tokens: 128
+  - name: "mistralai/Mistral-7B-Instruct-v0.3"
+    temperature: 0.6
+    top_p: 0.9
+    max_tokens: 128
+
+# Our new task and scenario
+task: ["kleister_nda_deepseek", "kleister_nda_docling", "kleister_nda_tesseract"]
+#task: ["kleister_nda_deepseek"]
+#scenario: ["batch", "single"]
+scenario: ["batch"]
+#batch_size: [5, 10, 20, 40]
+batch_size: [10]
+samples: 540

@@ -26,6 +26,7 @@ import sys
 import traceback
 import warnings
 from pathlib import Path
+from time import sleep
 from typing import Any, Dict, List, Tuple
 from rich.live import Live
 from rich.panel import Panel
@@ -41,7 +42,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from benchmark.benchmark import ModelBenchmark
+from benchmark.model_benchmark import ModelBenchmark
 from benchmark.utils_multi import load_multi_cfg
 
 # ── Silence noisy logs up‑front ─────────────────────────────────────────────
@@ -79,10 +80,17 @@ def _run_multi_cfgs(cfgs: List[Dict[str, Any]], verbose: bool = False, dump_serv
     prior_failures = _load_prior_failures()
     has_prior_failures = len(prior_failures) > 0
 
-
     # Combine + de-duplicate
     all_runs = {json.dumps(c, sort_keys=True): c for c in cfgs + prior_failures}
-    pending_cfgs = [cfg for cfg in all_runs.values() if not _results_exist(cfg)]
+
+    pending_cfgs = []
+    for cfg in all_runs.values():
+        if _results_exist(cfg):
+            # Output a nice, dim message so it doesn't clutter the console but lets you know it was skipped
+            console.print(
+                f"[dim]⏭  Skipping existing run: {cfg['backend']}/{cfg.get('model_name', 'unknown')} | {cfg['task']}:{cfg['scenario']}[/]")
+        else:
+            pending_cfgs.append(cfg)
 
     MAX_ATTEMPTS = 3
     attempt = 1
@@ -213,6 +221,8 @@ def _run_one(cfg: Dict[str, Any], bm: ModelBenchmark):
         quality_metric=cfg.get("quality_metric", True),
     )
     _save_results(report, details, readings, cfg)
+    print("sleeping 2min")
+    sleep(120)
     return report
 
 # ── Multi‑run orchestration with retry logic ────────────────────────────────

@@ -180,3 +180,4 @@ results/
 benchmark/lookup/database/
 MMLU/
 .idea/
+benchmark/data

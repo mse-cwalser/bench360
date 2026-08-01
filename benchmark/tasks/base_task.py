@@ -1,14 +1,16 @@
 from abc import ABC, abstractmethod
+from typing import Literal, Any
 
 class BaseTask(ABC):
     """
     Abstract base class for all NLP tasks.
     """
+    api_type: Literal["completion", "chat_completion"] = "completion"
 
     @abstractmethod
-    def generate_prompts(self, num_examples: int) -> tuple[list[str], list[str]]:
+    def generate_prompts(self, num_examples: int) -> tuple[list[str | dict[str, Any]], list[str]]:
         """
-        Should return a list of prompts and reference answers.
+        Should return a list of prompts (strings or multimodal dicts) and reference answers.
         """
         pass
 
