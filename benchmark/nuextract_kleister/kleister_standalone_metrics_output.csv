@@ -1,0 +1,2 @@
+model_name,task,num_queries,total_generation_time_s,avg_power_w,total_energy_wh,avg_cpu_util_pct,avg_gpu_util_pct,avg_ram_mb,avg_field_f1,avg_field_em,avg_calculated_document_f1,avg_calculated_field_em,avg_calculated_fuzzy_score
+NuExtract,kleister_nda,337,970.9946121950052,98.27091530886194,22.4558873197979,15.720725388601036,96.75336787564768,14359.095838730567,0.651175,0.4933234421364985,0.5955403152732529,0.5207715133531158,0.6551112759643917

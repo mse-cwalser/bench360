@@ -12,7 +12,7 @@ docker run -d --rm --gpus all \
   --model numind/NuExtract-2.0-4B \
   --trust-remote-code \
   --dtype bfloat16 \
-  --gpu-memory-utilization 0.75 \
+  --gpu-memory-utilization 0.8 \
   --max-model-len 32768 \
   --chat-template-content-format openai
 

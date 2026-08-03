@@ -186,13 +186,43 @@ async def process_document(client: AsyncOpenAI, pdf_path: str, template: Dict[st
             extract_from_images(client, chunk, template, example_image_url, example_output)
         )
 
-    print(f"      -> Concurrently extracting from {len(data_urls)} pages in {len(tasks)} batches...")
-
     # Execute all tasks concurrently and wait for them all to finish
     all_extracted_jsons = await asyncio.gather(*tasks)
 
     final_json = merge_extracted_jsons(list(all_extracted_jsons))
     return json.dumps(final_json)
+
+
+async def process_and_save_doc(doc: Dict[str, str], client: AsyncOpenAI, template: Dict[str, Any],
+                               example_image_url: str, example_output_json: str,
+                               writer, csvfile, sem: asyncio.Semaphore, csv_lock: asyncio.Lock):
+    filename = doc["filename"]
+    ground_truth = doc["ground_truth"]
+    pdf_path = os.path.join(PDF_DIR, filename)
+
+    if not os.path.exists(pdf_path):
+        print(f"\nSkipping {filename} - File not found at {pdf_path}")
+        return
+
+    # Wait for an available slot according to the semaphore limit
+    async with sem:
+        print(f"Processing {filename}...")
+        prediction_json_str = await process_document(
+            client=client,
+            pdf_path=pdf_path,
+            template=template,
+            example_image_url=example_image_url,
+            example_output=example_output_json
+        )
+
+    # Lock the CSV file so only one task can write to it at a time
+    async with csv_lock:
+        writer.writerow({
+            "filename": filename,
+            "ground_truth": ground_truth,
+            "prediction": prediction_json_str
+        })
+        csvfile.flush()
 
 
 # --- Main Pipeline ---
@@ -239,11 +269,14 @@ async def run_pipeline():
 
         tracker = EmissionsTracker(
             project_name="NuExtract_Kleister_Inference",
-            measure_power_secs=1,
+            measure_power_secs=0.1,
         )
         tracker.start()
 
-        processed_count = 0
+        # Configurable concurrency limit (adjust based on L4 VRAM vs document size)
+        MAX_CONCURRENT_DOCS = 10
+        sem = asyncio.Semaphore(MAX_CONCURRENT_DOCS)
+        csv_lock = asyncio.Lock()
 
         # Open CSV file to save predictions
         with open(OUTPUT_CSV, mode="w", newline="", encoding="utf-8") as csvfile:
@@ -251,32 +284,27 @@ async def run_pipeline():
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
 
+            tasks = []
             for doc in documents_to_process:
-                filename = doc["filename"]
-                ground_truth = doc["ground_truth"]
-                pdf_path = os.path.join(PDF_DIR, filename)
-
-                if os.path.exists(pdf_path):
-                    print(f"\n[{processed_count + 1}/{len(documents_to_process)}] Processing {filename}...")
-
-                    # Await the asynchronous processing of the document
-                    prediction_json_str = await process_document(
+                tasks.append(
+                    process_and_save_doc(
+                        doc=doc,
                         client=client,
-                        pdf_path=pdf_path,
                         template=template,
                         example_image_url=example_image_url,
-                        example_output=example_output_json
+                        example_output_json=example_output_json,
+                        writer=writer,
+                        csvfile=csvfile,
+                        sem=sem,
+                        csv_lock=csv_lock
                     )
+                )
 
-                    writer.writerow({
-                        "filename": filename,
-                        "ground_truth": ground_truth,
-                        "prediction": prediction_json_str
-                    })
-                    csvfile.flush()
-                    processed_count += 1
-                else:
-                    print(f"\nSkipping {filename} - File not found at {pdf_path}")
+            print(f"\nLaunching {len(tasks)} document tasks with a concurrency limit of {MAX_CONCURRENT_DOCS}...")
+
+            # Execute all tasks concurrently
+            await asyncio.gather(*tasks)
+            processed_count = len(tasks)
 
         emissions_kg = tracker.stop()
         energy_kwh = tracker.final_emissions_data.energy_consumed

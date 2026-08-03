@@ -1,0 +1,9 @@
+Metric,Value
+Total Documents Target,500
+Documents Successfully Converted,500
+Total Pages Processed,915
+Average Pages per Document,1.83
+Total Execution Time (s),3420.78
+Average Time per Document (s),6.84
+Energy Consumed (kWh),0.076409
+Carbon Emissions (kg CO2eq),0.002662
