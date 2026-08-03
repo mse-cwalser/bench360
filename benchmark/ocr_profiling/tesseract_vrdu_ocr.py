@@ -67,6 +67,7 @@ def run_ocr_benchmark(input_folder, output_folder, report_csv, max_workers, num_
     # Initialize the energy tracker, excluding the GPU
     tracker = EmissionsTracker(
         project_name="OCR_Parallel_Benchmark",
+        measure_power_secs=0.1,
         gpu_ids=[]  # This prevents CodeCarbon from tracking GPU power consumption
     )
 
