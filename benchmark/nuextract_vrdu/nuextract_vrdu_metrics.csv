@@ -1,0 +1,2 @@
+model_name,task,num_queries,total_generation_time_s,avg_power_w,total_energy_wh,avg_cpu_util_pct,avg_gpu_util_pct,avg_ram_mb,avg_field_f1,avg_field_em,avg_calculated_document_f1,avg_calculated_field_em,avg_calculated_fuzzy_score
+NuExtract,vrdu_registration,500,746.0403266739959,93.1897960607344,16.326253619693198,14.082384823848235,88.73170731707317,14784.420064786584,0.749252,0.7093262000000001,0.7404598845598845,0.7834333333333334,0.8149833333333334

@@ -29,7 +29,7 @@ VLLM_CONTAINER_NAME = "nuextract_vllm"
 VRDU_BASE_PATH = "../data/vrdu"
 DATASET_NAME = "registration"  # "registration" or "ad-buy"
 OUTPUT_CSV = "vrdu_predictions.csv"
-MAX_PAGES_PER_DOC = 5
+MAX_PAGES_PER_DOC = 10
 MAX_DOCS_TO_PROCESS = 500
 
 
@@ -367,6 +367,61 @@ async def process_document(
     return json.dumps(final_json)
 
 
+async def process_and_eval_doc(
+        doc: Dict[str, Any],
+        doc_index: int,
+        dataset: VRDUDataset,
+        client: AsyncOpenAI,
+        example_image_url: str,
+        example_output_json: str,
+        writer: csv.DictWriter,
+        csvfile,
+        sem: asyncio.Semaphore,
+        csv_lock: asyncio.Lock
+):
+    filename = doc.get("filename") or doc.get("id", f"doc_{doc_index}")
+    gold_fields = dataset.extract_gold_fields(doc)
+
+    if not gold_fields:
+        return None  # Signal to skip
+
+    # Dynamically construct a NuExtract template expecting lists of strings
+    template = {k: ["string"] for k in gold_fields.keys()}
+
+    data_urls = dataset.get_image_data_urls(doc)
+    if not data_urls:
+        print(f"\nSkipping {filename} - No valid images/PDF found.")
+        return None
+
+    # Wait for an open slot based on concurrency limits
+    async with sem:
+        print(f"Processing {filename}...")
+        prediction_json_str = await process_document(
+            client=client,
+            data_urls=data_urls,
+            template=template,
+            example_image_url=example_image_url,
+            example_output=example_output_json
+        )
+
+    # Compute Document Metrics
+    metrics = VRDUMetrics.compute_metrics(prediction_json_str, gold_fields)
+
+    # Safely lock the CSV file while writing
+    async with csv_lock:
+        writer.writerow({
+            "filename": filename,
+            "ground_truth": json.dumps(gold_fields),
+            "prediction": prediction_json_str,
+            "field_em": f"{metrics['field_em']:.4f}",
+            "field_f1": f"{metrics['field_f1']:.4f}",
+            "field_fuzzy": f"{metrics['field_fuzzy']:.4f}",
+        })
+        csvfile.flush()
+
+    return metrics
+
+
 # --- Main Orchestration ---
 async def run_pipeline():
     if fitz is None:
@@ -402,8 +457,13 @@ async def run_pipeline():
 
         print("\nStarting CodeCarbon tracker...")
         logging.getLogger("codecarbon").setLevel(logging.ERROR)
-        tracker = EmissionsTracker(project_name="NuExtract_VRDU_Inference", measure_power_secs=1)
+        tracker = EmissionsTracker(project_name="NuExtract_VRDU_Inference", measure_power_secs=0.1)
         tracker.start()
+
+        # Configurable concurrency limit for your NVIDIA L4
+        MAX_CONCURRENT_DOCS = 10
+        sem = asyncio.Semaphore(MAX_CONCURRENT_DOCS)
+        csv_lock = asyncio.Lock()
 
         processed_count = 0
         aggregate_metrics = {"subset_em": 0.0, "field_em": 0.0, "field_f1": 0.0, "field_substring": 0.0,
@@ -414,46 +474,35 @@ async def run_pipeline():
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
 
-            for doc in documents_to_process:
-                filename = doc.get("filename") or doc.get("id", f"doc_{processed_count}")
-                gold_fields = dataset.extract_gold_fields(doc)
-
-                if not gold_fields:
-                    continue
-
-                # Dynamically construct a NuExtract template expecting lists of strings
-                template = {k: ["string"] for k in gold_fields.keys()}
-
-                data_urls = dataset.get_image_data_urls(doc)
-                if not data_urls:
-                    print(f"\nSkipping {filename} - No valid images/PDF found.")
-                    continue
-
-                print(f"\n[{processed_count + 1}/{len(documents_to_process)}] Processing {filename}...")
-
-                prediction_json_str = await process_document(
-                    client=client,
-                    data_urls=data_urls,
-                    template=template,
-                    example_image_url=example_image_url,
-                    example_output=example_output_json
+            # Build all document tasks
+            tasks = []
+            for index, doc in enumerate(documents_to_process):
+                tasks.append(
+                    process_and_eval_doc(
+                        doc=doc,
+                        doc_index=index,
+                        dataset=dataset,
+                        client=client,
+                        example_image_url=example_image_url,
+                        example_output_json=example_output_json,
+                        writer=writer,
+                        csvfile=csvfile,
+                        sem=sem,
+                        csv_lock=csv_lock
+                    )
                 )
 
-                # Compute Document Metrics
-                metrics = VRDUMetrics.compute_metrics(prediction_json_str, gold_fields)
-                for k in aggregate_metrics:
-                    aggregate_metrics[k] += metrics[k]
+            print(f"\nLaunching {len(tasks)} document tasks concurrently...")
 
-                writer.writerow({
-                    "filename": filename,
-                    "ground_truth": json.dumps(gold_fields),
-                    "prediction": prediction_json_str,
-                    "field_em": f"{metrics['field_em']:.4f}",
-                    "field_f1": f"{metrics['field_f1']:.4f}",
-                    "field_fuzzy": f"{metrics['field_fuzzy']:.4f}",
-                })
-                csvfile.flush()
-                processed_count += 1
+            # Execute tasks
+            results = await asyncio.gather(*tasks)
+
+            # Aggregate the returned metrics sequentially
+            for metrics in results:
+                if metrics is not None:
+                    processed_count += 1
+                    for k in aggregate_metrics:
+                        aggregate_metrics[k] += metrics[k]
 
         emissions_kg = tracker.stop()
         energy_kwh = tracker.final_emissions_data.energy_consumed
