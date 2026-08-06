@@ -1,5 +1,6 @@
-experiment_name: "vrdu_vision_v2"
-backend: "vllm-vl-test"
+experiment_name: "vrdu_vision_noquant_v2"
+backend: "vllm-vl"
+
 hf_model:
   - name: "Qwen/Qwen3-VL-2B-Instruct"
     temperature: 0.7
@@ -13,9 +14,8 @@ hf_model:
     temperature: 0.7
     top_p: 0.8
     max_tokens: 128
+
 task: ["vrdu_vision"]
-#scenario: ["batch","single"]
-scenario: ["batch"]
-batch_size: [10]
-#batch_size: [5,10,20]
+scenario: ["batch","single"]
+batch_size: [5, 10, 20, 40, 60]
 samples: 500
