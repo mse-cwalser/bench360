@@ -1,5 +1,5 @@
-experiment_name: "kleister_nda_noquant"
-backend: "vllm"
+experiment_name: "kleister_nda_quant_v2"
+backend: "vllm-quant"
 
 hf_model:
   - name: "Qwen/Qwen3-0.6B"
@@ -36,6 +36,6 @@ hf_model:
     max_tokens: 128
 
 task: ["kleister_nda_deepseek", "kleister_nda_docling", "kleister_nda_tesseract"]
-scenario: [ "single", "single"]
-batch_size: [5, 10, 20, 40, 60]
+scenario: ["batch", "single"]
+batch_size: [5,10, 20, 40, 60]
 samples: 337
