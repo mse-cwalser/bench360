@@ -123,6 +123,130 @@ case "$ENGINE" in
         --port "$PORT"
     ;;
 
+  vllm-quant)
+    # ────────────────────────────────────────────────────────────────────────
+    # vLLM Quantized (OpenAI-compatible) container:
+    #
+    # Supports: fp8, awq, gptq, marlin, bitsandbytes, squeezellm, etc.
+    # Override via environment: QUANT_METHOD=awq ./launch_engine ...
+    # ────────────────────────────────────────────────────────────────────────
+    QUANT_METHOD="${QUANT_METHOD:-fp8}"
+
+    echo "Launching vLLM with quantization method: $QUANT_METHOD"
+
+    docker run --rm \
+      --name "$NAME" \
+      --runtime=nvidia --gpus all \
+      -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+      -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+      -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      -p 127.0.0.1:${PORT}:${PORT} \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+        --model "$MODEL" \
+        --trust-remote-code \
+        --max-model-len 31872 \
+        --gpu-memory-utilization 0.95 \
+        --port "$PORT" \
+        --quantization fp8
+    ;;
+
+  vllm-vl)
+    # ────────────────────────────────────────────────────────────────────────
+    # vLLM (OpenAI-compatible) container:
+    #
+    # docker run --rm \
+    #   --runtime=nvidia --gpus all \
+    #   -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+    #   -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+    #   -p 127.0.0.1:23333:23333 \
+    #   --ipc=host \
+    #   vllm/vllm-openai:latest \
+    #     --model mistralai/Mistral-7B-Instruct-v0.3 \
+    #     --port 23333
+    #
+    # ───────────────────
+    docker run --rm \
+      --runtime=nvidia --gpus all \
+      --name $NAME \
+      -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+      -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+      -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      -p 127.0.0.1:${PORT}:${PORT} \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+        --model "$MODEL" \
+        --trust-remote-code \
+        --max-model-len 14000 \
+        --port "$PORT" \
+        --gpu-memory-utilization 0.95 \
+        --no-enable-prefix-caching \
+        --limit-mm-per-prompt '{"image": 15}'
+    ;;
+
+  vllm-vl-quant)
+    # ────────────────────────────────────────────────────────────────────────
+    # vLLM (OpenAI-compatible) container:
+    #
+    # docker run --rm \
+    #   --runtime=nvidia --gpus all \
+    #   -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+    #   -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+    #   -p 127.0.0.1:23333:23333 \
+    #   --ipc=host \
+    #   vllm/vllm-openai:latest \
+    #     --model mistralai/Mistral-7B-Instruct-v0.3 \
+    #     --port 23333
+    #
+    # ───────────────────
+    docker run --rm \
+      --runtime=nvidia --gpus all \
+      --name $NAME \
+      -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+      -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+      -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      -p 127.0.0.1:${PORT}:${PORT} \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+        --model "$MODEL" \
+        --trust-remote-code \
+        --max-model-len 28000 \
+        --port "$PORT" \
+        --gpu-memory-utilization 0.95 \
+        --no-enable-prefix-caching \
+        --quantization fp8 \
+        --limit-mm-per-prompt '{"image": 15}'
+    ;;
+
+    vllm-quant-cache)
+    # ────────────────────────────────────────────────────────────────────────
+    # vLLM Quantized (OpenAI-compatible) container:
+    #
+    # Supports: fp8, awq, gptq, marlin, bitsandbytes, squeezellm, etc.
+    # Override via environment: QUANT_METHOD=awq ./launch_engine ...
+    # ────────────────────────────────────────────────────────────────────────
+    QUANT_METHOD="${QUANT_METHOD:-fp8}"
+
+    echo "Launching vLLM with quantization method: $QUANT_METHOD"
+
+    docker run --rm \
+      --name "$NAME" \
+      --runtime=nvidia --gpus all \
+      -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+      -e HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+      -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      -p 127.0.0.1:${PORT}:${PORT} \
+      --ipc=host \
+      vllm/vllm-openai:latest \
+        --model "$MODEL" \
+        --trust-remote-code \
+        --max-model-len 31872 \
+        --gpu-memory-utilization 0.9 \
+        --port "$PORT" \
+        --quantization fp8 \
+        --kv_cache_dtype fp8
+    ;;
+
   lmdeploy)
     # ────────────────────────────────────────────────────────────────────────
     # LMDeploy container:

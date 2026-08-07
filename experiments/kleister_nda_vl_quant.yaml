@@ -1,5 +1,5 @@
-experiment_name: "kleister_nda_vl_noquant"
-backend: "vllm-vl"
+experiment_name: "kleister_nda_vl_quant"
+backend: "vllm-vl-test"
 
 hf_model:
   - name: "Qwen/Qwen3-VL-2B-Instruct"
@@ -11,6 +11,10 @@ hf_model:
     top_p: 0.8
     max_tokens: 128
   - name: "Qwen/Qwen3-VL-8B-Instruct"
+    temperature: 0.7
+    top_p: 0.8
+    max_tokens: 128
+  - name: "OpenGVLab/InternVL3_5-4B"
     temperature: 0.7
     top_p: 0.8
     max_tokens: 128

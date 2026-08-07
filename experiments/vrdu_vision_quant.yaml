@@ -1,5 +1,5 @@
-experiment_name: "kleister_nda_vl_noquant"
-backend: "vllm-vl"
+experiment_name: "vrdu_vision_quant"
+backend: "vllm-vl-quant"
 
 hf_model:
   - name: "Qwen/Qwen3-VL-2B-Instruct"
@@ -15,7 +15,7 @@ hf_model:
     top_p: 0.8
     max_tokens: 128
 
-task: "kleister_nda_vision"
-scenario: ["batch", "single"]
+task: ["vrdu_vision"]
+scenario: ["batch","single"]
 batch_size: [5, 10, 20, 40, 60]
-samples: 337
+samples: 500

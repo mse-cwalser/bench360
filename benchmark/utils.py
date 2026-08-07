@@ -1,9 +1,11 @@
+import json
 import re, string
 from typing import Dict
 from collections import deque
 import threading
 from threading import Thread
 from math import floor
+from typing import Any
 
 
 def tok_cnt(text: str) -> int:
@@ -38,8 +40,9 @@ def sent_cnt(text: str, mode: str = "qa") -> int:
 
 
 def chunker(seq, size):
-            for i in range(0, len(seq), size):
-                yield seq[i : i + size]
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
 
 def normalize_answer(s: str) -> str:
     """
@@ -83,3 +86,27 @@ def _start_log_tailer(self, max_lines: int = 30, dump_server_output: bool = Fals
     self._stop_tail = threading.Event()
     self._tail_thread = Thread(target=_tail, daemon=True)
     self._tail_thread.start()
+
+
+def safe_json_loads(s: str) -> Any:
+    """
+    Safely loads a JSON string, stripping out any Markdown code block formatting
+    that LLMs often add (e.g., ```json ... ```).
+    """
+    if not s:
+        return {}
+
+    # Clean standard markdown code block formatting
+    s = s.strip()
+
+    if s.startswith("```"):
+        # Remove opening fence (``` or ```json)
+        s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+
+        # Remove closing fence
+        s = re.sub(r"\s*```$", "", s)
+
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, TypeError):
+        return {}
