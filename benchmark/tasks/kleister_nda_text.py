@@ -188,6 +188,19 @@ class KleisterNDATextTask(BaseTask):
     def _build_text_prompt(self, document_text: str, fields: List[str]) -> str:
         fields_str = ", ".join(fields)
 
+        # Dictionary containing the guidelines for all possible fields
+        field_guidelines = {
+            "effective_date": "`effective_date`: Extract the effective date. Strictly format as YYYY-MM-DD.",
+            "jurisdiction": "`jurisdiction`: The state or country whose laws govern the agreement (e.g., 'New York', 'Delaware').",
+            "party": "`party`: The exact names of the companies, organizations, or individuals entering into the agreement.",
+            "term": "`term`: The duration of the agreement. Format as a number followed by the unit (e.g., '3 years', '1 year', '6 months')."
+        }
+
+        # Dynamically build the guidelines string for ONLY the requested fields
+        requested_descriptions = "\n".join(
+            f"  - {field_guidelines[f]}" for f in fields if f in field_guidelines
+        )
+
         system_message = (
             "You are an information extraction engine.\n"
             "Your task is to extract specific fields from the provided Non-Disclosure Agreement (NDA) document text.\n"
@@ -197,15 +210,11 @@ class KleisterNDATextTask(BaseTask):
             "  - Each requested key MUST be present in the JSON.\n"
             "  - If a field appears multiple times (e.g., multiple parties), use a JSON array of unique values.\n"
             "  - Do NOT output any explanations, comments, or text outside the JSON object.\n\n"
-            "Field Guidelines:\n"
-            "  - `effective_date`: Extract the effective date. Strictly format as YYYY-MM-DD.\n"
-            "  - `jurisdiction`: The state or country whose laws govern the agreement (e.g., 'New York', 'Delaware').\n"
-            "  - `party`: The exact names of the companies, organizations, or individuals entering into the agreement.\n"
-            "  - `term`: The duration of the agreement. Format as a number followed by the unit (e.g., '3 years', '1 year', '6 months').\n"
+            f"Field Guidelines:\n{requested_descriptions}\n"
         )
 
         prompt_text = (
-            f"{system_message}\n\n"
+            f"{system_message}\n"
             f"--- DOCUMENT TEXT ---\n"
             f"{document_text}\n"
             f"--- END OF DOCUMENT ---\n\n"
@@ -214,7 +223,6 @@ class KleisterNDATextTask(BaseTask):
         )
 
         return prompt_text
-
     # ----------------------------
     # Utilities
     # ----------------------------
