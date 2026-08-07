@@ -169,7 +169,7 @@ class InferenceEngineClient:
         async with AsyncOpenAI(
                 api_key=self.client.api_key,
                 base_url=self.base_url,
-                timeout=httpx.Timeout(60.0)
+                timeout=httpx.Timeout(600.0)
         ) as async_client:
             # 2. Define the base parameters that work for all models
             api_kwargs = {
