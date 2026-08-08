@@ -88,6 +88,7 @@ def _to_list_of_str(v: Any) -> List[str]:
     if v is None: return []
     return [str(x) for x in v] if isinstance(v, list) else [str(v)]
 
+
 def compute_kleister_metrics(gold: Dict[str, Any], pred: Dict[str, Any], target_fields: List[str]) -> Dict[str, float]:
     """Computes F1, Precision, Recall, Exact Match, and Fuzzy scores for Kleister extractions."""
 
@@ -108,6 +109,7 @@ def compute_kleister_metrics(gold: Dict[str, Any], pred: Dict[str, Any], target_
 
     fuzzy_scores = []
     processed_keys = set()
+    perfect_fields = 0  # Tracker for percentage-based field_em
 
     # Calculate metrics by iterating over the target fields to capture both matches and misses
     for key in target_fields:
@@ -121,11 +123,17 @@ def compute_kleister_metrics(gold: Dict[str, Any], pred: Dict[str, Any], target_
 
         # Skip completely empty fields
         if not gt_val_list and not pred_val_list:
+            # If both are entirely missing, it counts as a perfect match for that field
+            perfect_fields += 1
             continue
 
         # Strictly apply Kleister NDA normalization
         norm_gt = set(apply_kleister_normalization(key, x) for x in gt_val_list)
         norm_pred = set(apply_kleister_normalization(key, x) for x in pred_val_list)
+
+        # EXACT MATCH CHECK FOR FIELD_EM
+        if norm_gt == norm_pred:
+            perfect_fields += 1
 
         # INTERSECTION LOGIC: Compare values individually rather than the whole set at once
         intersection = norm_gt.intersection(norm_pred)
@@ -143,14 +151,10 @@ def compute_kleister_metrics(gold: Dict[str, Any], pred: Dict[str, Any], target_
 
         # FUZZY MATCH LOGIC
         if not norm_gt or not norm_pred:
-            # If one has values but the other is empty, the similarity is 0
             fuzzy_scores.append(0.0)
         else:
-            # Join lists to a single string to compare the content
             gen_str = " ".join(sorted(list(norm_pred)))
             ref_str = " ".join(sorted(list(norm_gt)))
-
-            # token_sort_ratio returns a score between 0 and 100, which we scale to 0.0 - 1.0
             score = fuzz.token_sort_ratio(gen_str, ref_str) / 100.0
             fuzzy_scores.append(score)
 
@@ -169,8 +173,12 @@ def compute_kleister_metrics(gold: Dict[str, Any], pred: Dict[str, Any], target_
     doc_recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     doc_f1 = 2 * (doc_precision * doc_recall) / (doc_precision + doc_recall) if (doc_precision + doc_recall) > 0 else 0.0
 
-    # EXACT MATCH LOGIC: 1.0 if zero False Positives and zero False Negatives
+    # EXACT MATCH LOGIC
+    # subset_em: Strict 1.0 if ALL fields are correct (zero document-level errors)
     subset_em = 1.0 if (fp == 0 and fn == 0) else 0.0
+
+    # field_em: Percentage of perfectly matched fields
+    field_em = perfect_fields / len(target_fields) if target_fields else 0.0
 
     # Calculate Average Fuzzy Score
     avg_fuzzy = sum(fuzzy_scores) / len(fuzzy_scores) if fuzzy_scores else (1.0 if subset_em == 1.0 else 0.0)
@@ -178,7 +186,7 @@ def compute_kleister_metrics(gold: Dict[str, Any], pred: Dict[str, Any], target_
     metrics = {
         "subset_em": subset_em,
         "field_f1": doc_f1,
-        "field_em": subset_em,
+        "field_em": field_em,
         "avg_fuzzy_score": avg_fuzzy,
         "num_pages": num_pages,
         "num_words": num_words,
